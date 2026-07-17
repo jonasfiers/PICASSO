@@ -62,6 +62,12 @@ public static class CopybookParser
     private const int FixedFormatCodeLength = 66;
 
     /// <summary>
+    /// The code area ends at column 72; columns 73-80 are the identification area.
+    /// A line longer than this carries content past the code area.
+    /// </summary>
+    private const int CodeAreaEndColumn = 72;
+
+    /// <summary>
     /// Strips free-format "*&gt;" comments (to end of line, anywhere on the
     /// line) and handles traditional fixed-format lines: the columns-1-6
     /// sequence number is dropped, a '*' in column 7 marks the whole line as a
@@ -102,6 +108,25 @@ public static class CopybookParser
                 continue;
             }
 
+            // Separated columns-73-80 identification area on a line whose
+            // columns-1-6 sequence area is BLANK (so the numeric-cols-1-6 path
+            // above never fired and never truncated it). Many real fixed-format
+            // copybooks leave cols 1-6 blank yet still carry an 8-digit sequence
+            // number in cols 73-80; left in place it leaks into the tokenizer and
+            // falsely rejects a valid layout. Strip it CONSERVATIVELY — only when
+            // everything past column 72 is digits/spaces AND column 72 itself is a
+            // space, i.e. a blank gap separates the code from the trailing number.
+            // That space gap is what distinguishes a genuine identification field
+            // from free-format content (e.g. a numeric VALUE literal running past
+            // column 72 has no space immediately before its digits), so genuine
+            // free-format lines are never truncated.
+            if (line.Length > CodeAreaEndColumn
+                && line[CodeAreaEndColumn - 1] == ' '
+                && IsSeparatedIdentificationArea(line))
+            {
+                line = line.Substring(0, CodeAreaEndColumn);
+            }
+
             var commentStart = line.IndexOf("*>", StringComparison.Ordinal);
             if (commentStart >= 0)
                 line = line.Substring(0, commentStart);
@@ -109,6 +134,23 @@ public static class CopybookParser
             sb.Append(line).Append('\n');
         }
         return sb.ToString();
+    }
+
+    /// <summary>
+    /// True when every character from column 73 (0-indexed 72) to end-of-line is
+    /// a digit or a space — the shape of a classic all-numeric identification /
+    /// sequence-number area. Any other character (a letter, punctuation, a PIC
+    /// symbol) means the tail is real code, not an identification field.
+    /// </summary>
+    private static bool IsSeparatedIdentificationArea(string line)
+    {
+        for (var i = CodeAreaEndColumn; i < line.Length; i++)
+        {
+            var c = line[i];
+            if (c != ' ' && (c < '0' || c > '9'))
+                return false;
+        }
+        return true;
     }
 
     /// <summary>
