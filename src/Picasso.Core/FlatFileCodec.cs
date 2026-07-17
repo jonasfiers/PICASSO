@@ -132,6 +132,11 @@ public static class FlatFileCodec
                 // Deliberately not translated — see the class remarks.
                 return Comp3.Decode(Latin1StringToBytes(raw), field.Digits, field.Scale, field.Signed);
 
+            case FieldType.Binary:
+                // Big-endian two's-complement integer bytes — like COMP-3, raw
+                // binary that must never pass through an encoding table.
+                return Binary.Decode(Latin1StringToBytes(raw), field.Digits, field.Scale, field.Signed);
+
             case FieldType.NumericDisplay:
                 return DecodeNumericDisplay(DecodeText(raw, encoding), field);
 
@@ -196,6 +201,14 @@ public static class FlatFileCodec
                 // Deliberately not translated — see the class remarks.
                 var d = Convert.ToDecimal(value);
                 var bytes = Comp3.Encode(d, field.Digits, field.Scale, field.Signed);
+                return BytesToLatin1String(bytes);
+            }
+
+            case FieldType.Binary:
+            {
+                // Deliberately not translated — big-endian two's-complement bytes.
+                var d = Convert.ToDecimal(value);
+                var bytes = Binary.Encode(d, field.Digits, field.Scale, field.Signed);
                 return BytesToLatin1String(bytes);
             }
 

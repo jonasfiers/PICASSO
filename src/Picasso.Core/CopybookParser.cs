@@ -244,6 +244,7 @@ public static class CopybookParser
 
         string? pictureText = null;
         var comp3 = false;
+        var binary = false;
         var signSeparate = false;
         var signLeading = false;
         var occursCount = 1;
@@ -338,42 +339,54 @@ public static class CopybookParser
                         "own bytes, never bytes another field also claims. See README's " +
                         "'Not supported (v1)' section.");
 
-                // Unsupported USAGE clauses. Each changes a field's physical byte
-                // width away from the DISPLAY (one byte per digit/char) sizing this
-                // parser computes — a binary halfword/fullword, a 4- or 8-byte
-                // float, packed decimal, an aligned/synchronized item, a national
-                // (double-byte) field, or an index/pointer with an implementation-
-                // defined size. Skipping the clause (the pre-fix behaviour) left the
-                // field mis-sized with no error. COMP-1/COMP-2 carry no PIC at all,
-                // so the item would have vanished entirely, shifting every following
-                // offset. Rejected loudly here, one named error per usage, exactly
-                // like REDEFINES — never silently miscomputed. COMP-3
-                // (COMPUTATIONAL-3) packed decimal stays supported, matched above.
+                // Binary integer USAGE — COMP / COMPUTATIONAL / COMP-4 / COMP-5 /
+                // BINARY. Big-endian two's-complement (signed) or magnitude
+                // (unsigned), width fixed by the PIC digit count (see Binary.cs).
+                // COMP-5 is "native binary" (host byte order on the source machine);
+                // on the mainframe extracts PICASSO decodes that is big-endian too,
+                // so it routes through the same path — consistent with the
+                // big-endian-only assumption EBCDIC and COMP-3 already make.
                 case "COMP":
                 case "COMPUTATIONAL":
-                    throw UnsupportedUsage("COMP", "binary", name, statement);
+                case "COMP-4":
+                case "COMPUTATIONAL-4":
+                case "COMP-5":
+                case "COMPUTATIONAL-5":
+                case "BINARY":
+                    binary = true;
+                    i += 1;
+                    break;
+
+                // PACKED-DECIMAL is byte-identical to COMP-3; alias it to the same
+                // packed-decimal path rather than giving it a parallel implementation.
+                case "PACKED-DECIMAL":
+                    comp3 = true;
+                    i += 1;
+                    break;
+
+                // Unsupported USAGE clauses. Each changes a field's physical byte
+                // width away from the DISPLAY (one byte per digit/char) sizing this
+                // parser computes — a 4- or 8-byte float, a Micro Focus dialect
+                // binary, an aligned/synchronized item, a national (double-byte)
+                // field, or an index/pointer with an implementation-defined size.
+                // Skipping the clause (the pre-fix behaviour) left the field
+                // mis-sized with no error. COMP-1/COMP-2 carry no PIC at all, so the
+                // item would have vanished entirely, shifting every following offset.
+                // Rejected loudly here, one named error per usage, exactly like
+                // REDEFINES — never silently miscomputed. COMP-3 (COMPUTATIONAL-3)
+                // packed decimal and the binary COMP forms above stay supported.
                 case "COMP-1":
                 case "COMPUTATIONAL-1":
                     throw UnsupportedUsage("COMP-1", "single-precision float", name, statement);
                 case "COMP-2":
                 case "COMPUTATIONAL-2":
                     throw UnsupportedUsage("COMP-2", "double-precision float", name, statement);
-                case "COMP-4":
-                case "COMPUTATIONAL-4":
-                    throw UnsupportedUsage("COMP-4", "binary", name, statement);
-                case "COMP-5":
-                case "COMPUTATIONAL-5":
-                    throw UnsupportedUsage("COMP-5", "native binary", name, statement);
                 case "COMP-6":
                 case "COMPUTATIONAL-6":
                     throw UnsupportedUsage("COMP-6", "unsigned packed decimal", name, statement);
                 case "COMP-X":
                 case "COMPUTATIONAL-X":
                     throw UnsupportedUsage("COMP-X", "binary", name, statement);
-                case "BINARY":
-                    throw UnsupportedUsage("BINARY", "binary", name, statement);
-                case "PACKED-DECIMAL":
-                    throw UnsupportedUsage("PACKED-DECIMAL", "packed decimal", name, statement);
                 case "INDEX":
                     throw UnsupportedUsage("INDEX", "index", name, statement);
                 case "POINTER":
@@ -416,7 +429,7 @@ public static class CopybookParser
 
         FieldSpec? field = null;
         if (pictureText != null)
-            field = BuildFieldSpec(name, Pic.ParsePicClause(pictureText), comp3, signSeparate, signLeading);
+            field = BuildFieldSpec(name, Pic.ParsePicClause(pictureText), comp3, binary, signSeparate, signLeading);
 
         return new ParsedStatement { LevelNumber = level, Name = name, Field = field, OccursCount = occursCount };
     }
@@ -436,7 +449,7 @@ public static class CopybookParser
             "not compute, and silently skipping the clause would mis-size it. See README's " +
             "'Not supported (v1)' section.");
 
-    private static FieldSpec BuildFieldSpec(string name, PicSpec pic, bool comp3, bool signSeparate, bool signLeading)
+    private static FieldSpec BuildFieldSpec(string name, PicSpec pic, bool comp3, bool binary, bool signSeparate, bool signLeading)
     {
         // An edited picture (Z $ , . - + CR DB …) is not value-interpreted: Pic
         // computed its exact display width, and it is surfaced as a Text field of
@@ -448,6 +461,8 @@ public static class CopybookParser
         {
             if (comp3)
                 throw new FormatException($"COMP-3 cannot be combined with an edited PIC clause: field '{name}'.");
+            if (binary)
+                throw new FormatException($"Binary (COMP) cannot be combined with an edited PIC clause: field '{name}'.");
             if (signSeparate)
                 throw new FormatException($"SIGN IS ... SEPARATE cannot be combined with an edited PIC clause: field '{name}'.");
 
@@ -463,6 +478,8 @@ public static class CopybookParser
         {
             if (comp3)
                 throw new FormatException($"COMP-3 is only valid for numeric PIC clauses: field '{name}'.");
+            if (binary)
+                throw new FormatException($"Binary (COMP) is only valid for numeric PIC clauses: field '{name}'.");
             if (signSeparate)
                 throw new FormatException($"SIGN clause is only valid for numeric PIC clauses: field '{name}'.");
 
@@ -487,6 +504,28 @@ public static class CopybookParser
                 Scale = pic.Scale,
                 Signed = pic.Signed,
                 Len = Comp3.ByteLength(pic.Digits),
+            };
+        }
+
+        if (binary)
+        {
+            // The sign of a binary integer is intrinsic to its two's-complement
+            // representation (the PIC's S), never a separate byte — so SIGN IS ...
+            // SEPARATE on a COMP field is contradictory and rejected loudly, the
+            // same fail-loud stance COMP-3 takes.
+            if (signSeparate)
+                throw new FormatException(
+                    $"SIGN IS ... SEPARATE cannot be combined with binary (COMP): its sign is intrinsic " +
+                    $"to the two's-complement representation, not a separate byte: field '{name}'.");
+
+            return new FieldSpec
+            {
+                Name = name,
+                Type = FieldType.Binary,
+                Digits = pic.Digits,
+                Scale = pic.Scale,
+                Signed = pic.Signed,
+                Len = Binary.ByteLength(pic.Digits),
             };
         }
 
