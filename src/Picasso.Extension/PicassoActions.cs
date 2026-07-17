@@ -89,11 +89,28 @@ public sealed class PicassoActions
 
     /// <summary>
     /// Decodes fixed-width text into records, given a layout from
-    /// <see cref="ParseCopybook"/>.
+    /// <see cref="ParseCopybook"/>. Assumes ASCII/Latin-1 text; use the
+    /// <paramref name="textEncoding"/> overload for an EBCDIC mainframe extract.
     /// </summary>
     public bool DecodeRecords(
         string flatSpecJson,
         string fixedWidthText,
+        out string recordsJson,
+        out string errorMessage) =>
+        DecodeRecords(flatSpecJson, fixedWidthText, "", out recordsJson, out errorMessage);
+
+    /// <summary>
+    /// Decodes fixed-width text into records. <paramref name="textEncoding"/>
+    /// names the encoding of the file's *text* bytes: "" or "LATIN1"/"ASCII"
+    /// for the default, "EBCDIC" (equivalently "CP037"/"EBCDIC037") for an
+    /// EBCDIC cp037 mainframe extract. COMP-3 fields are never affected by it.
+    /// An unrecognized name is an error, not a fallback to the default —
+    /// quietly decoding a mainframe file as ASCII is the failure this avoids.
+    /// </summary>
+    public bool DecodeRecords(
+        string flatSpecJson,
+        string fixedWidthText,
+        string textEncoding,
         out string recordsJson,
         out string errorMessage)
     {
@@ -103,7 +120,7 @@ public sealed class PicassoActions
         try
         {
             var spec = ReadSpec(flatSpecJson);
-            var records = FlatFileCodec.Decode(spec, fixedWidthText ?? "");
+            var records = FlatFileCodec.Decode(spec, fixedWidthText ?? "", ParseEncoding(textEncoding));
 
             var payload = records
                 .Select(r => r.ToDictionary(kv => kv.Key, kv => kv.Value))
@@ -122,11 +139,25 @@ public sealed class PicassoActions
     // ---- Action 3: EncodeRecords ----
 
     /// <summary>
-    /// Encodes records back to fixed-width text, given the same layout.
+    /// Encodes records back to fixed-width text, given the same layout. Writes
+    /// ASCII/Latin-1 text; use the <paramref name="textEncoding"/> overload to
+    /// write an EBCDIC mainframe extract.
     /// </summary>
     public bool EncodeRecords(
         string flatSpecJson,
         string recordsJson,
+        out string fixedWidthText,
+        out string errorMessage) =>
+        EncodeRecords(flatSpecJson, recordsJson, "", out fixedWidthText, out errorMessage);
+
+    /// <summary>
+    /// Encodes records back to fixed-width text. <paramref name="textEncoding"/>
+    /// takes the same names as <see cref="DecodeRecords(string,string,string,out string,out string)"/>.
+    /// </summary>
+    public bool EncodeRecords(
+        string flatSpecJson,
+        string recordsJson,
+        string textEncoding,
         out string fixedWidthText,
         out string errorMessage)
     {
@@ -137,13 +168,40 @@ public sealed class PicassoActions
         {
             var spec = ReadSpec(flatSpecJson);
             var records = ReadRecords(recordsJson, spec);
-            fixedWidthText = FlatFileCodec.Encode(spec, records);
+            fixedWidthText = FlatFileCodec.Encode(spec, records, ParseEncoding(textEncoding));
             return true;
         }
         catch (Exception ex)
         {
             errorMessage = ex.Message;
             return false;
+        }
+    }
+
+    /// <summary>
+    /// Maps the action surface's encoding name onto <see cref="CharacterEncoding"/>.
+    /// Unknown names throw: this boundary turns exceptions into a false result
+    /// plus errorMessage, so a typo surfaces as a named failure rather than a
+    /// silent ASCII decode of an EBCDIC file.
+    /// </summary>
+    private static CharacterEncoding ParseEncoding(string name)
+    {
+        switch ((name ?? "").Trim().ToUpperInvariant())
+        {
+            case "":
+            case "ASCII":
+            case "LATIN1":
+                return CharacterEncoding.Latin1;
+
+            case "EBCDIC":
+            case "CP037":
+            case "EBCDIC037":
+                return CharacterEncoding.Ebcdic037;
+
+            default:
+                throw new ArgumentException(
+                    $"Unknown text encoding '{name}'. Use '' or 'LATIN1'/'ASCII' for ASCII text, " +
+                    "or 'EBCDIC' (cp037) for a mainframe extract.");
         }
     }
 

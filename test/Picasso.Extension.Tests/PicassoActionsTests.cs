@@ -125,6 +125,49 @@ public class PicassoActionsTests
         Assert.DoesNotContain("sign", names);
     }
 
+    // ---- Text encoding (cp037) ----
+
+    [Fact]
+    public void EbcdicSurvivesTheFullActionRoundtrip()
+    {
+        // Same contract as the end-to-end test above, but with the file's text
+        // bytes in EBCDIC — the shape a real mainframe extract arrives in.
+        Assert.True(_actions.GetSampleCopybook("portrait-rec", out var copybook, out var data, out var error), error);
+        Assert.True(_actions.ParseCopybook(copybook, out var specJson, out _, out error), error);
+        Assert.True(_actions.DecodeRecords(specJson, data, out var recordsJson, out error), error);
+
+        Assert.True(_actions.EncodeRecords(specJson, recordsJson, "EBCDIC", out var ebcdic, out error), error);
+        Assert.NotEqual(data, ebcdic);            // text bytes really did change...
+        Assert.Equal(data.Length, ebcdic.Length); // ...without moving any field
+
+        Assert.True(_actions.DecodeRecords(specJson, ebcdic, "EBCDIC", out var back, out error), error);
+        Assert.Equal(recordsJson, back);
+    }
+
+    [Fact]
+    public void OmittingTheEncodingIsTheSameAsAskingForLatin1()
+    {
+        Assert.True(_actions.GetSampleCopybook("portrait-rec", out var copybook, out var data, out var error), error);
+        Assert.True(_actions.ParseCopybook(copybook, out var specJson, out _, out error), error);
+
+        Assert.True(_actions.DecodeRecords(specJson, data, out var byDefault, out error), error);
+        Assert.True(_actions.DecodeRecords(specJson, data, "LATIN1", out var byName, out error), error);
+        Assert.Equal(byDefault, byName);
+    }
+
+    [Fact]
+    public void AnUnknownEncodingNameFailsLoudlyRatherThanDefaulting()
+    {
+        // Silently falling back to ASCII on a typo would decode a mainframe
+        // file to garbage and report success.
+        Assert.True(_actions.GetSampleCopybook("portrait-rec", out var copybook, out var data, out var error), error);
+        Assert.True(_actions.ParseCopybook(copybook, out var specJson, out _, out error), error);
+
+        Assert.False(_actions.DecodeRecords(specJson, data, "EBCDIK", out _, out error));
+        Assert.Contains("EBCDIK", error);
+        Assert.False(_actions.EncodeRecords(specJson, "[]", "EBCDIK", out _, out error));
+    }
+
     // ---- Failure modes come back as errorMessage, never as exceptions ----
 
     [Fact]

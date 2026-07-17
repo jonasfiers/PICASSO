@@ -30,14 +30,14 @@ The proof is [`ParityWithCatalog74Tests`](test/Picasso.Core.Tests/ParityWithCata
 - **Parses** multi-level group/elementary structures, `PIC 9(n)`, `PIC X(n)`, implied decimal (`V`), `SIGN IS LEADING/TRAILING SEPARATE`, and **COMP-3** packed decimal.
 - **Reads both source formats** — free-format (`*>` comments) and traditional fixed-format, where columns 1–6 are a line-sequence number, column 7 flags a comment, and columns 73–80 are an identification area to ignore. Detection is per line, so the two can mix in one file; no mode flag to pass.
 - **Derives** the flat byte layout: `{Name, Start, Len, Type, Digits, Scale, Signed, Comp3}` per field.
-- **Decodes / encodes** fixed-width flat files against that layout, round-tripping byte-for-byte.
+- **Decodes / encodes** fixed-width flat files against that layout, round-tripping byte-for-byte — in ASCII/Latin-1, or in **EBCDIC cp037** for a real mainframe extract. The encoding is applied per field, never to the record as a whole, so COMP-3 bytes are left alone: running packed decimals through a code page table is what destroys them.
 - **Previews** the layout as an OutSystems Structure would see it — `PIC 9(n)` → Integer, implied-decimal and COMP-3 → Decimal, `PIC X(n)` → Text.
 
 It ships eleven bundled copybooks (the nine real CATALOG-74 layouts, one synthetic, and one genuine 1990s mainframe copybook), embedded in the assembly.
 
 None of the data is hand-authored. Seven files are CATALOG-74's own seed data. Two — `AMOUNT-OWED.DAT` and `AMOUNT-PAID.DAT` — are real GnuCOBOL output, captured by compiling CATALOG-74's `CALC-OWED`/`CALC-PAID` and running the batch, which matters because those two layouts have no hand-written `specs.js` counterpart to check against: a real COBOL runtime is the better golden anyway. `PORTRAIT-SAMPLE.DAT` is generated through PICASSO's own encoder rather than typed out, because hand-authoring COMP-3 nibbles is exactly the error-prone transcription this project exists to avoid.
 
-The eleventh, [**DTAR020**](src/Picasso.Core/Samples/dtar020/README.md), isn't CATALOG-74's and isn't synthetic — it's a real copybook from an actual reporting system, dated 19/12/90. Running it as-is is what found the fixed-format-source, headless-copy-member, and EBCDIC gaps; fixed-format source is now handled natively, and it's bundled with its sequence numbers intact to prove it. Its own data file isn't bundled as a selectable sample because of the EBCDIC gap (see the link).
+The eleventh, [**DTAR020**](src/Picasso.Core/Samples/dtar020/README.md), isn't CATALOG-74's and isn't synthetic — it's a real copybook from an actual reporting system, dated 19/12/90. Running it as-is is what found the fixed-format-source, EBCDIC, headless-copy-member, and undelimited-record gaps. The first two are now handled natively — it's bundled with its sequence numbers intact, and its EBCDIC text field decodes to the value its original toolchain publishes. Its data file still isn't a selectable sample: it has no record delimiters (see the link).
 
 ## The one deliberate discrepancy
 
@@ -62,7 +62,8 @@ PICASSO models it the way COBOL defines it: **one** `NET-BALANCE` field spanning
 - **`REDEFINES`** — two names for the same bytes. Which is thematically ironic for a project named after a Cubist, and duly noted.
 - **Overpunched signs** — `PIC S9(5)` without an explicit `SIGN IS ... SEPARATE` clause is rejected rather than guessed at. Failing loudly beats mis-sizing a field by one byte and corrupting everything downstream of it.
 - **Headless copy members** — a copybook starting at level `03` with no wrapping `01`, meant to be `COPY`'d into a program's own record, is a common real-world shape the parser doesn't yet accept. The genuine 1990s mainframe copybook bundled at [`Samples/dtar020/`](src/Picasso.Core/Samples/dtar020/README.md) is one, and gets a synthetic `01` prepended by hand.
-- **EBCDIC** — text (`PIC X`) fields are decoded as ASCII/Latin-1 only. Real mainframe extracts are frequently EBCDIC; COMP-3 is unaffected (packed decimal nibbles aren't a character encoding), but `PIC X` fields decode to garbage. Also found via the DTAR020 sample.
+- **Undelimited records** — the codec splits records on newlines, which is a Unix convention, not a mainframe one. A file that's a bare concatenation of fixed-length records with no delimiters (like `DTAR020.bin`) can't be split by record length yet. Decoding a single record at a time works.
+- **EBCDIC variants other than cp037** — cp037 (US/Canada) is supported and is the variant DTAR020 uses. cp273 (German), cp500 (International), cp1047 and the rest of the family disagree on punctuation placement, and there's no real file here to verify them against, so they're not guessed at.
 
 Levels 66 (`RENAMES`) and 88 (condition-names) are rejected with a named error.
 
@@ -73,6 +74,7 @@ src/
   Picasso.Core/            The engine. netstandard2.0, zero OutSystems dependency.
     Pic.cs                   PIC picture-string parsing
     Comp3.cs                 Packed decimal encode/decode
+    Ebcdic.cs                EBCDIC cp037 <-> Unicode, for text bytes only
     CopybookParser.cs        Strip → split → parse → tree → offsets → flatten
     FlatFileCodec.cs         Fixed-width text <-> records
     OutSystemsPreview.cs     Flat layout -> OutSystems attribute rows

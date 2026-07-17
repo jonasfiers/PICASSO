@@ -188,3 +188,108 @@ public class RoundtripTests
             Assert.Equal(record[key], decoded[key]);
     }
 }
+
+/// <summary>
+/// The same roundtrip guarantee, in EBCDIC cp037. The interesting case isn't
+/// the text — it's that text and COMP-3 have to be handled differently within
+/// one record: translate everything and the packed decimals corrupt, translate
+/// nothing and the text is mojibake.
+/// </summary>
+public class EbcdicCodecTests
+{
+    private const string Copybook = @"
+01  MIXED-REC.
+    05  NAME       PIC X(6).
+    05  QTY        PIC S9(5)V99 COMP-3.
+    05  CODE       PIC X(2).
+    05  COUNT      PIC 9(3).
+";
+
+    private static IReadOnlyList<FieldSpec> Spec() => CopybookParser.Parse(Copybook).Flat;
+
+    private static Dictionary<string, object> Sample() => new()
+    {
+        ["NAME"] = "ABC",       // shorter than the field: exercises pad translation
+        ["QTY"] = -12.34m,      // negative COMP-3: nibbles must survive untouched
+        ["CODE"] = "Z9",
+        ["COUNT"] = 7m,
+    };
+
+    [Fact]
+    public void RoundtripsThroughEbcdic()
+    {
+        var spec = Spec();
+        var encoded = FlatFileCodec.Encode(spec, new[] { Sample() }, CharacterEncoding.Ebcdic037);
+        var decoded = Assert.Single(FlatFileCodec.Decode(spec, encoded, CharacterEncoding.Ebcdic037));
+
+        Assert.Equal("ABC", decoded["NAME"]);
+        Assert.Equal(-12.34m, decoded["QTY"]);
+        Assert.Equal("Z9", decoded["CODE"]);
+        Assert.Equal(7m, decoded["COUNT"]);
+    }
+
+    /// <summary>
+    /// The load-bearing assertion for the whole design: within one record, the
+    /// text bytes must change under EBCDIC and the COMP-3 bytes must not. A
+    /// blanket record-level translation would fail this — and would be the
+    /// FTP-ASCII-mode bug that silently destroys packed decimals.
+    /// </summary>
+    [Fact]
+    public void TranslatesTextAndDisplayNumericsButNeverComp3()
+    {
+        var spec = Spec();
+        var latin1 = FlatFileCodec.Encode(spec, new[] { Sample() });
+        var ebcdic = FlatFileCodec.Encode(spec, new[] { Sample() }, CharacterEncoding.Ebcdic037);
+
+        Assert.Equal(latin1.Length, ebcdic.Length); // encoding never changes field widths
+
+        string Slice(string s, string fieldName)
+        {
+            var f = spec.Single(x => x.Name == fieldName);
+            return s.Substring(f.Start, f.Len);
+        }
+
+        // COMP-3: byte-for-byte identical under both encodings — untouched.
+        Assert.Equal(Slice(latin1, "QTY"), Slice(ebcdic, "QTY"));
+
+        // Text: "ABC" + 3 pad bytes, as cp037 — not ASCII, and padded with
+        // 0x40 rather than 0x20.
+        Assert.Equal(
+            new byte[] { 0xC1, 0xC2, 0xC3, 0x40, 0x40, 0x40 },
+            Slice(ebcdic, "NAME").Select(c => (byte)c).ToArray());
+        Assert.Equal("ABC   ", Slice(latin1, "NAME"));
+
+        // DISPLAY numerics are text too: "007" as EBCDIC digits, not 0x30-0x32.
+        Assert.Equal(
+            new byte[] { 0xF0, 0xF0, 0xF7 },
+            Slice(ebcdic, "COUNT").Select(c => (byte)c).ToArray());
+        Assert.Equal("007", Slice(latin1, "COUNT"));
+    }
+
+    /// <summary>
+    /// Why the encoding has to be an explicit caller choice and is never
+    /// guessed: reading EBCDIC as Latin-1 is only loud when the record happens
+    /// to contain a DISPLAY numeric, whose EBCDIC digits won't parse. A
+    /// text-only record decodes silently wrong. There is no detecting this
+    /// after the fact — the caller has to say.
+    /// </summary>
+    [Fact]
+    public void ReadingEbcdicAsLatin1IsLoudOnlyIfTheRecordHasADisplayNumeric()
+    {
+        var spec = Spec();
+        var ebcdic = FlatFileCodec.Encode(spec, new[] { Sample() }, CharacterEncoding.Ebcdic037);
+
+        // COUNT (PIC 9(3)) saves us here: 0xF0 0xF0 0xF7 isn't a number.
+        Assert.ThrowsAny<Exception>(() => FlatFileCodec.Decode(spec, ebcdic));
+
+        // Text-only, and the same mistake passes silently with garbage values.
+        var textOnly = CopybookParser.Parse("01  R.\n    05  NAME PIC X(6).\n").Flat;
+        var encoded = FlatFileCodec.Encode(textOnly, new[] { Sample() }, CharacterEncoding.Ebcdic037);
+        var decoded = Assert.Single(FlatFileCodec.Decode(textOnly, encoded));
+
+        Assert.NotEqual("ABC", decoded["NAME"]);
+        // Not even the padding survives: EBCDIC pads with 0x40, which reads as
+        // '@' in Latin-1, so TrimEnd(' ') leaves it on the value.
+        Assert.Equal("ÁÂÃ@@@", decoded["NAME"]);
+    }
+}

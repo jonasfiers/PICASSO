@@ -58,9 +58,12 @@ All parameters are **Text** unless noted.
 |---|---|---|
 | `FlatSpecJson` | Input | Text |
 | `FixedWidthText` | Input | Text |
+| `TextEncoding` | Input | Text |
 | `Success` | Output | Boolean |
 | `RecordsJson` | Output | Text |
 | `ErrorMessage` | Output | Text |
+
+`TextEncoding` names the encoding of the file's **text** bytes: leave it blank (or `LATIN1`/`ASCII`) for ordinary ASCII data, or pass `EBCDIC` for a cp037 mainframe extract. COMP-3 fields are never affected by it. An unrecognized name comes back as `Success = False` rather than quietly defaulting to ASCII. If you'd rather not wire the parameter at all, there's a four-input overload without it that behaves exactly as blank does.
 
 ### `EncodeRecords`
 
@@ -68,9 +71,12 @@ All parameters are **Text** unless noted.
 |---|---|---|
 | `FlatSpecJson` | Input | Text |
 | `RecordsJson` | Input | Text |
+| `TextEncoding` | Input | Text |
 | `Success` | Output | Boolean |
 | `FixedWidthText` | Output | Text |
 | `ErrorMessage` | Output | Text |
+
+`TextEncoding` takes the same names as `DecodeRecords`, and writes the text bytes in that encoding.
 
 ### `GetSampleCopybook`
 
@@ -127,17 +133,17 @@ public void MssParseCopybook(string ssCopybookSource, out bool ssSuccess,
         out ssFlatSpecJson, out ssStructurePreviewJson, out ssErrorMessage);
 }
 
-public void MssDecodeRecords(string ssFlatSpecJson, string ssFixedWidthText,
+public void MssDecodeRecords(string ssFlatSpecJson, string ssFixedWidthText, string ssTextEncoding,
     out bool ssSuccess, out string ssRecordsJson, out string ssErrorMessage)
 {
-    ssSuccess = _picasso.DecodeRecords(ssFlatSpecJson, ssFixedWidthText,
+    ssSuccess = _picasso.DecodeRecords(ssFlatSpecJson, ssFixedWidthText, ssTextEncoding,
         out ssRecordsJson, out ssErrorMessage);
 }
 
-public void MssEncodeRecords(string ssFlatSpecJson, string ssRecordsJson,
+public void MssEncodeRecords(string ssFlatSpecJson, string ssRecordsJson, string ssTextEncoding,
     out bool ssSuccess, out string ssFixedWidthText, out string ssErrorMessage)
 {
-    ssSuccess = _picasso.EncodeRecords(ssFlatSpecJson, ssRecordsJson,
+    ssSuccess = _picasso.EncodeRecords(ssFlatSpecJson, ssRecordsJson, ssTextEncoding,
         out ssFixedWidthText, out ssErrorMessage);
 }
 

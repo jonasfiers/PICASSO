@@ -156,7 +156,7 @@ Monospace matters here: fixed-width data only reads as fixed-width in a fixed-wi
 
 #### Action: `DoRun`
 
-- **Decode**: `DecodeRecords(FlatSpecJson, FixedWidthText)` → `RecordsJson`.
+- **Decode**: `DecodeRecords(FlatSpecJson, FixedWidthText, TextEncoding)` → `RecordsJson`. Leave `TextEncoding` blank for ASCII data; pass `EBCDIC` for a cp037 mainframe extract.
 - **Encode**: `EncodeRecords(FlatSpecJson, RecordsJson)` → `FixedWidthText`.
 
 Either way: if not `Success`, set `ErrorMessage` and stop.

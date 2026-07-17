@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using Picasso.Core;
@@ -12,17 +13,17 @@ namespace Picasso.Core.Tests;
 /// copybook (dated 19/12/90, credited "BRUCE ARTHUR", from an actual
 /// reporting system) with a real 379-record binary extract, sourced from
 /// github.com/bmTas/CobolToJson (LGPL-2.1). See Samples/dtar020/README.md
-/// for the gaps running it uncovered — neither of which any synthetic
-/// copybook had exposed. Its fixed-format source is now parsed natively;
-/// EBCDIC text and headless (no 01-level) copy members are still open.
+/// for the gaps running it uncovered, none of which any synthetic copybook
+/// had exposed. Its fixed-format source and its EBCDIC text are both handled
+/// now; two gaps remain — it's a headless copy member (no 01 level), so the
+/// bundled .cpy still needs a synthetic 01 prepended, and DTAR020.bin has no
+/// record delimiters, which FlatFileCodec's newline-based record splitting
+/// can't chop up.
 ///
-/// Because of those remaining gaps, this test does not call the public
-/// FlatFileCodec.Decode (it assumes newline-delimited records; DTAR020.bin
-/// has none) or assert anything about DTAR020-KEYCODE-NO (it's EBCDIC;
-/// PICASSO only supports ASCII/Latin-1 text). It decodes the four COMP-3
-/// fields by hand, the same way FlatFileCodec does internally, and checks
-/// them against values independently published in CobolToJson's own
-/// README — not anything derived from PICASSO.
+/// That second gap is why the whole-file assertions here still slice records
+/// by offset by hand rather than calling FlatFileCodec.Decode over the file.
+/// Every expected value below is one CobolToJson's own README publishes —
+/// nothing here is derived from PICASSO.
 /// </summary>
 public class Dtar020RealWorldTests
 {
@@ -106,8 +107,13 @@ public class Dtar020RealWorldTests
         Assert.Equal(5.01m, DecodeComp3Field(Record(2), "DTAR020-SALE-PRICE"));
     }
 
+    /// <summary>
+    /// The EBCDIC text field, which used to decode to garbage. "69684558" is
+    /// the value CobolToJson's own README publishes for record 0 — this is the
+    /// gap closing against real data, not against a fixture we wrote.
+    /// </summary>
     [Fact]
-    public void TextFieldIsGarbledBecauseTheSourceIsEbcdic_DocumentedNotFixed()
+    public void DecodesTheEbcdicTextField()
     {
         var parsed = ParseDtar020();
         var recordLen = parsed.Flat.Sum(f => f.Len);
@@ -115,13 +121,71 @@ public class Dtar020RealWorldTests
         var text = new string(rawBytes.Select(b => (char)b).ToArray());
 
         var keycode = parsed.Flat.Single(f => f.Name == "DTAR020-KEYCODE-NO");
-        var raw = text.Substring(0, recordLen).Substring(keycode.Start, keycode.Len).TrimEnd(' ');
+        var raw = text.Substring(0, recordLen).Substring(keycode.Start, keycode.Len);
 
-        // Real expected value (per CobolToJson's README) is "69684558" — an
-        // EBCDIC-aware decoder would produce that. PICASSO's Latin-1-only
-        // text decode does not, and this test exists to make that failure
-        // visible and intentional rather than silently swallowed.
-        Assert.NotEqual("69684558", raw);
-        Assert.Equal("öùöøôõõø", raw); // EBCDIC digit bytes read as Latin-1
+        Assert.Equal("69684558", Ebcdic.Decode(raw).TrimEnd(' '));
+
+        // Latin-1 — the default, and what this used to do — still reads the
+        // same bytes as mojibake. The encoding is a real choice, not a guess.
+        Assert.Equal("öùöøôõõø", raw.TrimEnd(' '));
+    }
+
+    /// <summary>
+    /// The whole point of doing this per field: a blanket EBCDIC->ASCII pass
+    /// over the record (the FTP-ASCII-mode mistake) would corrupt all four
+    /// COMP-3 fields. Decoding one real record through the public codec with
+    /// Ebcdic037 must get the text field AND the packed fields right at once.
+    /// </summary>
+    [Fact]
+    public void DecodesARealRecordThroughThePublicCodec_TextAndComp3Together()
+    {
+        var parsed = ParseDtar020();
+        var recordLen = parsed.Flat.Sum(f => f.Len);
+        var rawBytes = File.ReadAllBytes(SamplePaths.Root("dtar020/DTAR020.bin"));
+
+        // One record only: DTAR020.bin has no delimiters, so FlatFileCodec's
+        // newline-based record splitting can't chop the whole file up. Feeding
+        // it exactly one record's bytes sidesteps that (still-open) gap.
+        var oneRecord = new string(rawBytes.Take(recordLen).Select(b => (char)b).ToArray());
+        Assert.DoesNotContain('\n', oneRecord); // else the split would tear it
+
+        var record = Assert.Single(
+            FlatFileCodec.Decode(parsed.Flat, oneRecord, CharacterEncoding.Ebcdic037));
+
+        Assert.Equal("69684558", record["DTAR020-KEYCODE-NO"]);
+        Assert.Equal(20m, record["DTAR020-STORE-NO"]);
+        Assert.Equal(40118m, record["DTAR020-DATE"]);
+        Assert.Equal(280m, record["DTAR020-DEPT-NO"]);
+        Assert.Equal(1m, record["DTAR020-QTY-SOLD"]);
+        Assert.Equal(19.00m, record["DTAR020-SALE-PRICE"]);
+    }
+
+    /// <summary>
+    /// The strongest check available here: re-encoding the published values
+    /// must reproduce a genuine mainframe record byte for byte. Nothing in
+    /// this assertion comes from PICASSO — the input values are CobolToJson's
+    /// published ones and the expected bytes are the real file's.
+    /// </summary>
+    [Fact]
+    public void ReEncodesToByteIdenticalRealMainframeBytes()
+    {
+        var parsed = ParseDtar020();
+        var recordLen = parsed.Flat.Sum(f => f.Len);
+        var rawBytes = File.ReadAllBytes(SamplePaths.Root("dtar020/DTAR020.bin"));
+
+        var values = new Dictionary<string, object>
+        {
+            ["DTAR020-KEYCODE-NO"] = "69684558",
+            ["DTAR020-STORE-NO"] = 20m,
+            ["DTAR020-DATE"] = 40118m,
+            ["DTAR020-DEPT-NO"] = 280m,
+            ["DTAR020-QTY-SOLD"] = 1m,
+            ["DTAR020-SALE-PRICE"] = 19.00m,
+        };
+
+        var encoded = FlatFileCodec.Encode(
+            parsed.Flat, new[] { values }, CharacterEncoding.Ebcdic037).TrimEnd('\n');
+
+        Assert.Equal(rawBytes.Take(recordLen).ToArray(), encoded.Select(c => (byte)c).ToArray());
     }
 }
