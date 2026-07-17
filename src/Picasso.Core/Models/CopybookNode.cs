@@ -24,6 +24,16 @@ public sealed class CopybookNode
 
     public bool IsGroup => Field is null;
 
+    /// <summary>
+    /// Fixed OCCURS repeat count: how many times this item (elementary field or
+    /// whole group) repeats. 1 means no OCCURS clause. Set by
+    /// CopybookParser.ParseStatement; consumed by ComputeOffsets (which multiplies
+    /// the item's byte span) and Flatten (which expands it into that many indexed
+    /// leaf fields). Variable OCCURS (DEPENDING ON) is rejected at parse time and
+    /// never reaches this, so the count is always a concrete integer.
+    /// </summary>
+    public int OccursCount { get; set; } = 1;
+
     /// <summary>Populated by CopybookParser.ComputeOffsets.</summary>
     public int Start { get; set; }
     public int Len { get; set; }

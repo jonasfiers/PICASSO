@@ -417,18 +417,11 @@ public class CopybookParserTests
         Assert.Throws<FormatException>(() => CopybookParser.Parse("      *> only a comment\n"));
     }
 
-    [Fact]
-    public void RejectsOccurs()
-    {
-        // Previously silently ignored: OCCURS's repeat count was skipped like
-        // an unrecognized clause, so a 5x10-byte repeating field parsed as a
-        // single 10-byte field and every offset after it was wrong -- with no
-        // error. This is the regression test for that.
-        var ex = Assert.Throws<FormatException>(() => CopybookParser.Parse(
-            "01  R.\n    05  REPEATED PIC X(10) OCCURS 5 TIMES.\n    05  NEXT PIC X(5).\n"));
-        Assert.Contains("OCCURS", ex.Message);
-        Assert.Contains("REPEATED", ex.Message);
-    }
+    // Fixed-count OCCURS is now a supported feature; its full behaviour lives in
+    // OccursTests. The rejection cases that must survive alongside it — the
+    // variable-length (ODO) form and the table-of-tables form — are asserted
+    // there too, so the "easier case didn't swallow the harder ones" guarantee
+    // is regression-tested next to the feature it guards.
 
     [Fact]
     public void RejectsRedefines()

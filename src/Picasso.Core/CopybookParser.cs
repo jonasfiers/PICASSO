@@ -38,6 +38,8 @@ public static class CopybookParser
         if (root is null)
             throw new FormatException("Copybook has no data-item entries.");
 
+        RejectNestedOccurs(root, insideOccurs: false);
+
         ComputeOffsets(root, 0);
 
         var flat = new List<FieldSpec>();
@@ -126,6 +128,7 @@ public static class CopybookParser
         public int LevelNumber;
         public string Name = "";
         public FieldSpec? Field;
+        public int OccursCount = 1;
     }
 
     private static ParsedStatement ParseStatement(string statement)
@@ -147,6 +150,7 @@ public static class CopybookParser
         var comp3 = false;
         var signSeparate = false;
         var signLeading = false;
+        var occursCount = 1;
 
         var i = 2;
         while (i < tokens.Length)
@@ -192,10 +196,44 @@ public static class CopybookParser
                     break;
 
                 case "OCCURS":
-                    throw new FormatException(
-                        $"OCCURS is not supported: field '{name}' repeats, which a flat {{Start, Len}} " +
-                        "list can't express — it needs either indexed field names or a nested result " +
-                        "shape. See README's 'Not supported (v1)' section.");
+                {
+                    // Variable-length OCCURS (ODO): "OCCURS m TO n TIMES DEPENDING
+                    // ON f". Rejected up front, distinctly, and never treated as a
+                    // fixed count — there is no single fixed count in that clause
+                    // (m/n are bounds), and its record length becomes data-dependent
+                    // at decode time, which PICASSO's compute-once offset model
+                    // can't express. A DEPENDING or a TO anywhere in the OCCURS
+                    // clause marks the variable form; both keywords occur only here.
+                    for (var j = i + 1; j < tokens.Length; j++)
+                    {
+                        var t = tokens[j].ToUpperInvariant();
+                        if (t == "DEPENDING" || t == "TO")
+                            throw new FormatException(
+                                $"OCCURS ... DEPENDING ON (variable-length / ODO) is not supported: field '{name}' " +
+                                $"in \"{statement}\". Its length is data-dependent at decode time, which this " +
+                                "parser's fixed, compute-once offsets cannot model. Only fixed-count " +
+                                "'OCCURS n [TIMES]' is supported.");
+                    }
+
+                    i += 1; // consume OCCURS
+                    if (i >= tokens.Length || !int.TryParse(tokens[i], out occursCount))
+                        throw new FormatException(
+                            $"OCCURS must be followed by an integer repeat count: field '{name}' in \"{statement}\".");
+                    if (occursCount < 1)
+                        throw new FormatException(
+                            $"OCCURS count must be at least 1: field '{name}' in \"{statement}\".");
+                    i += 1;
+
+                    // TIMES is optional (some dialects write "OCCURS 5", others
+                    // "OCCURS 5 TIMES"); both are accepted. Any INDEXED BY / KEY IS
+                    // sub-clauses that follow fall through to the default skip below,
+                    // one token at a time, exactly like VALUE/JUSTIFIED — a real
+                    // clause after them (PIC, COMP-3) is still matched by its own
+                    // keyword, so nothing load-bearing is swallowed.
+                    if (i < tokens.Length && tokens[i].Equals("TIMES", StringComparison.OrdinalIgnoreCase))
+                        i += 1;
+                    break;
+                }
 
                 case "REDEFINES":
                     throw new FormatException(
@@ -216,7 +254,7 @@ public static class CopybookParser
         if (pictureText != null)
             field = BuildFieldSpec(name, Pic.ParsePicClause(pictureText), comp3, signSeparate, signLeading);
 
-        return new ParsedStatement { LevelNumber = level, Name = name, Field = field };
+        return new ParsedStatement { LevelNumber = level, Name = name, Field = field, OccursCount = occursCount };
     }
 
     private static FieldSpec BuildFieldSpec(string name, PicSpec pic, bool comp3, bool signSeparate, bool signLeading)
@@ -308,7 +346,11 @@ public static class CopybookParser
         foreach (var statementText in statements)
         {
             var parsed = ParseStatement(statementText);
-            var node = new CopybookNode(parsed.Name, parsed.LevelNumber) { Field = parsed.Field };
+            var node = new CopybookNode(parsed.Name, parsed.LevelNumber)
+            {
+                Field = parsed.Field,
+                OccursCount = parsed.OccursCount,
+            };
 
             while (stack.Count > 0 && stack[stack.Count - 1].LevelNumber >= node.LevelNumber)
                 stack.RemoveAt(stack.Count - 1);
@@ -355,27 +397,85 @@ public static class CopybookParser
         return synthetic;
     }
 
+    /// <summary>
+    /// Rejects a table of tables — an OCCURS item anywhere beneath another OCCURS
+    /// item. A deliberate, named non-goal for this pass, distinct from OCCURS ...
+    /// DEPENDING ON: the offset math generalizes cleanly, but the flattened-name
+    /// convention (which index binds to which level) and its test surface are a
+    /// separate design decision left for future work. Rejected loudly rather than
+    /// mis-expanded, matching how this parser treats every other unmodeled shape.
+    /// </summary>
+    private static void RejectNestedOccurs(CopybookNode node, bool insideOccurs)
+    {
+        if (node.OccursCount > 1 && insideOccurs)
+            throw new FormatException(
+                $"Nested OCCURS is not supported: field '{node.Name}' has an OCCURS clause inside another " +
+                "OCCURS item (a table of tables). Only a single level of OCCURS is supported. This is a " +
+                "distinct non-goal from OCCURS ... DEPENDING ON — both are unsupported, for different reasons.");
+
+        var nowInside = insideOccurs || node.OccursCount > 1;
+        foreach (var child in node.Children)
+            RejectNestedOccurs(child, nowInside);
+    }
+
+    /// <summary>
+    /// Depth-first running byte counter. An OCCURS item's span is its single
+    /// iteration's length times its repeat count: the children (or the elementary
+    /// field) are laid out once, then the whole item is multiplied so that every
+    /// field after it starts past all the copies. The per-copy field offsets
+    /// themselves are materialized later, in <see cref="Flatten"/>.
+    /// </summary>
     public static int ComputeOffsets(CopybookNode node, int startOffset)
     {
+        int oneIterationLen;
         if (node.IsGroup)
         {
             var offset = startOffset;
             foreach (var child in node.Children)
                 offset = ComputeOffsets(child, offset);
-
-            node.Start = startOffset;
-            node.Len = offset - startOffset;
-            return offset;
+            oneIterationLen = offset - startOffset;
+        }
+        else
+        {
+            node.Field!.Start = startOffset;
+            oneIterationLen = node.Field.Len;
         }
 
         node.Start = startOffset;
-        node.Len = node.Field!.Len;
-        node.Field.Start = startOffset;
-        return startOffset + node.Field.Len;
+        node.Len = oneIterationLen * node.OccursCount;
+        return startOffset + node.Len;
     }
 
     public static void Flatten(CopybookNode node, List<FieldSpec> into)
     {
+        if (node.OccursCount > 1)
+        {
+            // One OCCURS item -> OccursCount indexed copies. COBOL tables are
+            // 1-indexed, so copies run (1)..(n). Nested OCCURS is rejected before
+            // we get here, so an OCCURS subtree contains no further OCCURS and one
+            // iteration's byte length is simply node.Len / OccursCount.
+            var oneIterationLen = node.Len / node.OccursCount;
+            for (var index = 1; index <= node.OccursCount; index++)
+            {
+                var shift = (index - 1) * oneIterationLen;
+                var indexedName = $"{node.Name}({index})";
+
+                if (node.IsGroup)
+                {
+                    // Group OCCURS: the parenthesized index rides on the group name
+                    // and prefixes every descendant leaf, e.g. LINE-ITEM(2)-ITEM-QTY.
+                    foreach (var child in node.Children)
+                        EmitIndexedLeaves(child, into, shift, indexedName);
+                }
+                else
+                {
+                    // Elementary OCCURS: the leaf itself becomes NAME(index).
+                    into.Add(ShiftField(node.Field!, shift, indexedName));
+                }
+            }
+            return;
+        }
+
         if (node.IsGroup)
         {
             foreach (var child in node.Children)
@@ -386,4 +486,44 @@ public static class CopybookParser
             into.Add(node.Field!);
         }
     }
+
+    /// <summary>
+    /// Emits the leaves of one iteration of an OCCURS group, offset by
+    /// <paramref name="shift"/> bytes and named <paramref name="prefix"/> + '-' +
+    /// leaf name. The '-' separator is unambiguous because the prefix always
+    /// carries a parenthesized index (NAME(k)-...), and '(' / ')' are not legal in
+    /// a COBOL identifier — so an expanded name can never collide with a real one.
+    /// Only OccursCount == 1 subtrees reach here (nested OCCURS is rejected).
+    /// </summary>
+    private static void EmitIndexedLeaves(CopybookNode node, List<FieldSpec> into, int shift, string prefix)
+    {
+        if (node.IsGroup)
+        {
+            foreach (var child in node.Children)
+                EmitIndexedLeaves(child, into, shift, prefix);
+        }
+        else
+        {
+            into.Add(ShiftField(node.Field!, shift, $"{prefix}-{node.Field!.Name}"));
+        }
+    }
+
+    /// <summary>
+    /// A copy of a leaf field for one OCCURS iteration: same type and sizing, its
+    /// absolute start advanced by <paramref name="shift"/> and renamed. The source
+    /// field's own Start is iteration 1's absolute offset, so shift == 0 reproduces
+    /// it exactly.
+    /// </summary>
+    private static FieldSpec ShiftField(FieldSpec source, int shift, string name) => new FieldSpec
+    {
+        Name = name,
+        Start = source.Start + shift,
+        Len = source.Len,
+        Type = source.Type,
+        Digits = source.Digits,
+        Scale = source.Scale,
+        Signed = source.Signed,
+        SignSeparate = source.SignSeparate,
+        SignLeading = source.SignLeading,
+    };
 }
