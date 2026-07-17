@@ -38,6 +38,101 @@ public static class CopybookParser
         if (root is null)
             throw new FormatException("Copybook has no data-item entries.");
 
+        return FinalizeRecord(root, rootIsSynthetic);
+    }
+
+    /// <summary>
+    /// Parses copybook source into <b>every</b> top-level record it defines, each
+    /// as an independent layout with its own byte offsets starting at 0 and its
+    /// own flat field list. This is the additive companion to <see cref="Parse"/>,
+    /// which handles only a single record and rejects a copybook with more than
+    /// one 01-level entry.
+    ///
+    /// <para>
+    /// Multiple 01-level records in one copybook are <b>alternative</b> layouts —
+    /// different record types sharing one physical file (e.g. a header record and
+    /// a detail record) — not fields of one larger record. They are never
+    /// concatenated: each begins at byte offset 0 and is decoded independently,
+    /// the caller choosing which layout applies to a given record (typically by a
+    /// record-type discriminator field). This method returns them in source order,
+    /// each finalized exactly as <see cref="Parse"/> would finalize a lone record.
+    /// </para>
+    ///
+    /// <para>Shapes:</para>
+    /// <list type="bullet">
+    /// <item>A single 01 record → a one-element list, byte-identical to what
+    /// <see cref="Parse"/> returns.</item>
+    /// <item>A headless copy member (no 01) → a one-element list wrapping the
+    /// entries under the synthetic 01 named <paramref name="recordName"/>, exactly
+    /// as <see cref="Parse"/> does. The name is shared across the (single) record.</item>
+    /// <item>N alternative 01 records → an N-element list, each record independent
+    /// and offset from 0.</item>
+    /// </list>
+    ///
+    /// <paramref name="recordName"/> is used only for the headless case (there is
+    /// no 01 to name); a copybook that supplies its own 01 names ignores it.
+    /// Each record is subject to the same fail-loud empty-record guard as
+    /// <see cref="Parse"/>: a record with no storage-bearing elementary field
+    /// throws.
+    /// </summary>
+    public static IReadOnlyList<ParsedCopybook> ParseRecords(string source, string recordName = SyntheticRecordName)
+    {
+        if (string.IsNullOrWhiteSpace(recordName))
+            throw new ArgumentException("Record name cannot be blank.", nameof(recordName));
+
+        var stripped = StripComments(source);
+        var statements = SplitStatements(stripped);
+        var tops = BuildTops(statements);
+
+        if (tops.Count == 0)
+            throw new FormatException("Copybook has no data-item entries.");
+
+        var records = new List<ParsedCopybook>(tops.Count);
+
+        if (tops.Any(t => t.LevelNumber == 1))
+        {
+            // One or more 01-level records. In well-formed source every top-level
+            // entry is then an 01 (a lower-level item after an 01 nests under it,
+            // and only another 01 starts a new top). A non-01 top mixed in means
+            // an orphan entry belonging to no record — malformed, not guessed at.
+            var orphan = tops.FirstOrDefault(t => t.LevelNumber != 1);
+            if (orphan != null)
+                throw new FormatException(
+                    $"Copybook mixes an 01-level record with a top-level entry at level {orphan.LevelNumber} " +
+                    $"('{orphan.Name}') that belongs to no record. Every top-level entry must either be an " +
+                    "01-level record or nest under one.");
+
+            // Each 01 is already an independent subtree; finalize each from offset 0.
+            foreach (var top in tops)
+                records.Add(FinalizeRecord(top, rootIsSynthetic: false));
+            return records;
+        }
+
+        // Headless: no 01 anywhere. All top entries are fields of one record and
+        // must share a level number (same rule BuildTree applies); wrap them in a
+        // single synthetic 01. A headless member is one record, never several.
+        var level = tops[0].LevelNumber;
+        var odd = tops.FirstOrDefault(t => t.LevelNumber != level);
+        if (odd != null)
+            throw new FormatException(
+                $"Copybook has no 01-level record, and its top-level entries disagree on level number " +
+                $"(level {level} '{tops[0].Name}' vs level {odd.LevelNumber} '{odd.Name}'). " +
+                "Entries of one record must share a level number.");
+
+        var synthetic = new CopybookNode(recordName, 1);
+        synthetic.Children.AddRange(tops);
+        records.Add(FinalizeRecord(synthetic, rootIsSynthetic: true));
+        return records;
+    }
+
+    /// <summary>
+    /// Turns one resolved record root into a <see cref="ParsedCopybook"/>: rejects
+    /// nested OCCURS, computes byte offsets from 0, flattens to leaf fields, and
+    /// applies the fail-loud empty-record guard. Shared by <see cref="Parse"/> and
+    /// <see cref="ParseRecords"/> so a record is finalized identically either way.
+    /// </summary>
+    private static ParsedCopybook FinalizeRecord(CopybookNode root, bool rootIsSynthetic)
+    {
         RejectNestedOccurs(root, insideOccurs: false);
 
         ComputeOffsets(root, 0);
@@ -46,13 +141,13 @@ public static class CopybookParser
         Flatten(root, flat);
 
         // Every elementary field has Len >= 1, so an empty flat list means the
-        // copybook has statements but no storage-bearing field (a bare 01, a
+        // record has statements but no storage-bearing field (a bare 01, a
         // childless group, or a group whose only children are level-88
         // condition-names). Decoding against that would silently produce a
         // zero-byte record — fail loudly instead.
         if (flat.Count == 0)
             throw new FormatException(
-                "Copybook defines no elementary fields with storage — the record would be zero bytes. " +
+                $"Record '{root.Name}' defines no elementary fields with storage — it would be zero bytes. " +
                 "A layout needs at least one PIC field.");
 
         return new ParsedCopybook(root, flat, rootIsSynthetic);
@@ -644,13 +739,16 @@ public static class CopybookParser
     /// still an error. Those are alternative record layouts, not siblings, and
     /// wrapping them would silently concatenate them into one wrong record.
     /// </summary>
-    public static CopybookNode? BuildTree(
-        IReadOnlyList<string> statements,
-        string recordName,
-        out bool rootIsSynthetic)
+    /// <summary>
+    /// Resolves level-number nesting into a forest of top-level entries, without
+    /// deciding what they mean (one 01 record, several alternative 01 records, or
+    /// a headless copy member). Level-88 condition-names parse to null and are
+    /// skipped without touching the level stack. Shared by <see cref="BuildTree"/>
+    /// (which collapses the forest to a single record or rejects a multi-01) and
+    /// <see cref="ParseRecords"/> (which keeps each 01 as an independent record).
+    /// </summary>
+    private static List<CopybookNode> BuildTops(IReadOnlyList<string> statements)
     {
-        rootIsSynthetic = false;
-
         var tops = new List<CopybookNode>();
         var stack = new List<CopybookNode>();
 
@@ -680,6 +778,18 @@ public static class CopybookParser
 
             stack.Add(node);
         }
+
+        return tops;
+    }
+
+    public static CopybookNode? BuildTree(
+        IReadOnlyList<string> statements,
+        string recordName,
+        out bool rootIsSynthetic)
+    {
+        rootIsSynthetic = false;
+
+        var tops = BuildTops(statements);
 
         if (tops.Count == 0)
             return null;
