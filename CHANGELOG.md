@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.1.0 — fixed-count OCCURS
+
+- Fixed-count `OCCURS` is now a supported feature rather than a blanket rejection. An `OCCURS n TIMES` item (`TIMES` optional) — an elementary field or a whole group — is expanded into `n` 1-indexed leaf fields with sequentially computed offsets, one full iteration's worth of bytes apart. This keeps the flat `{Name, Start, Len, Type, …}` model every consumer (`FlatFileCodec`, the JSON contract, `OutSystemsPreview`, the Integration Studio actions) already runs on, rather than introducing a parallel nested/array shape.
+- Naming convention: elementary `OCCURS` yields `NAME(1)`…`NAME(n)`; a group `OCCURS` propagates the parenthesized index into every descendant, e.g. `LINE-ITEM(2)-ITEM-QTY`. The `-` separator between the indexed parent and a child is unambiguous because `(` and `)` are illegal in a COBOL identifier — so an expanded name can never collide with a real field name. Matches COBOL's own 1-indexed table convention.
+- `INDEXED BY name` and `ASCENDING`/`DESCENDING KEY IS name` sub-clauses on the same statement are tolerated and skipped (index-access concerns PICASSO doesn't model), without disturbing the repeat count or any following clause.
+- `OCCURS … DEPENDING ON` (variable-length / ODO) stays rejected, now with its own distinct, named error separate from the fixed-count path — the `m TO n` bounds are never mistaken for a fixed count. Its record length is data-dependent at decode time, which PICASSO's compute-once offset model can't express; out of scope by design.
+- Nested `OCCURS` (a table of tables) is rejected with its own distinct, named error — a deliberate, documented non-goal for this pass, separate from ODO.
+- The prior blanket `OCCURS` rejection (added alongside `REDEFINES`) is replaced for the fixed-count case; `REDEFINES` handling is unchanged and still rejected.
+
 ## 1.0.0 — initial release
 
 - Copybook parser: multi-level group/elementary structures, `PIC 9(n)`, `PIC X(n)`, implied decimal (`V`), `SIGN IS LEADING/TRAILING SEPARATE`, and COMP-3 packed decimal.
