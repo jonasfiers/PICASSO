@@ -242,6 +242,54 @@ public static class CopybookParser
                         "own bytes, never bytes another field also claims. See README's " +
                         "'Not supported (v1)' section.");
 
+                // Unsupported USAGE clauses. Each changes a field's physical byte
+                // width away from the DISPLAY (one byte per digit/char) sizing this
+                // parser computes — a binary halfword/fullword, a 4- or 8-byte
+                // float, packed decimal, an aligned/synchronized item, a national
+                // (double-byte) field, or an index/pointer with an implementation-
+                // defined size. Skipping the clause (the pre-fix behaviour) left the
+                // field mis-sized with no error. COMP-1/COMP-2 carry no PIC at all,
+                // so the item would have vanished entirely, shifting every following
+                // offset. Rejected loudly here, one named error per usage, exactly
+                // like REDEFINES — never silently miscomputed. COMP-3
+                // (COMPUTATIONAL-3) packed decimal stays supported, matched above.
+                case "COMP":
+                case "COMPUTATIONAL":
+                    throw UnsupportedUsage("COMP", "binary", name, statement);
+                case "COMP-1":
+                case "COMPUTATIONAL-1":
+                    throw UnsupportedUsage("COMP-1", "single-precision float", name, statement);
+                case "COMP-2":
+                case "COMPUTATIONAL-2":
+                    throw UnsupportedUsage("COMP-2", "double-precision float", name, statement);
+                case "COMP-4":
+                case "COMPUTATIONAL-4":
+                    throw UnsupportedUsage("COMP-4", "binary", name, statement);
+                case "COMP-5":
+                case "COMPUTATIONAL-5":
+                    throw UnsupportedUsage("COMP-5", "native binary", name, statement);
+                case "COMP-6":
+                    throw UnsupportedUsage("COMP-6", "unsigned packed decimal", name, statement);
+                case "COMP-X":
+                    throw UnsupportedUsage("COMP-X", "binary", name, statement);
+                case "BINARY":
+                    throw UnsupportedUsage("BINARY", "binary", name, statement);
+                case "PACKED-DECIMAL":
+                    throw UnsupportedUsage("PACKED-DECIMAL", "packed decimal", name, statement);
+                case "INDEX":
+                    throw UnsupportedUsage("INDEX", "index", name, statement);
+                case "POINTER":
+                    throw UnsupportedUsage("POINTER", "pointer", name, statement);
+                case "PROCEDURE-POINTER":
+                    throw UnsupportedUsage("PROCEDURE-POINTER", "procedure pointer", name, statement);
+                case "FUNCTION-POINTER":
+                    throw UnsupportedUsage("FUNCTION-POINTER", "function pointer", name, statement);
+                case "SYNC":
+                case "SYNCHRONIZED":
+                    throw UnsupportedUsage("SYNC", "synchronized/aligned", name, statement);
+                case "NATIONAL":
+                    throw UnsupportedUsage("NATIONAL", "national (double-byte)", name, statement);
+
                 default:
                     // Unrecognized clause (e.g. VALUE, JUSTIFIED) — skip
                     // one token at a time; out of scope for v1.
@@ -256,6 +304,21 @@ public static class CopybookParser
 
         return new ParsedStatement { LevelNumber = level, Name = name, Field = field, OccursCount = occursCount };
     }
+
+    /// <summary>
+    /// Builds the named FormatException for an unsupported USAGE clause. The
+    /// message identifies which usage was seen (COMP vs COMP-1 vs BINARY, …) so a
+    /// caller can tell exactly what tripped it, names the field, and points at the
+    /// README — matching the REDEFINES / ODO rejection style. Every one of these
+    /// gives a field a physical width other than DISPLAY's one-byte-per-digit/char,
+    /// which this parser does not compute; rejecting beats silently mis-sizing.
+    /// </summary>
+    private static FormatException UnsupportedUsage(string usage, string kind, string name, string statement) =>
+        new FormatException(
+            $"{usage} ({kind}) usage is not supported: field '{name}' in \"{statement}\". PICASSO models " +
+            "DISPLAY and COMP-3 only; a field with this usage has a different physical width this parser does " +
+            "not compute, and silently skipping the clause would mis-size it. See README's " +
+            "'Not supported (v1)' section.");
 
     private static FieldSpec BuildFieldSpec(string name, PicSpec pic, bool comp3, bool signSeparate, bool signLeading)
     {
