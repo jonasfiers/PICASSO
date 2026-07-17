@@ -140,6 +140,68 @@ public class PicassoActionsTests
         Assert.Equal(72.00m, first.GetProperty("NET-BALANCE").GetDecimal());
     }
 
+    // ---- OCCURS across the action surface ----
+
+    private const string OccursCopybook = @"
+01  ORDER-REC.
+    05  ORDER-ID    PIC 9(5).
+    05  LINE-ITEM OCCURS 3 TIMES.
+        10  ITEM-CODE  PIC X(4).
+        10  ITEM-QTY   PIC 9(3).
+    05  ORDER-NOTE  PIC X(6).
+";
+
+    [Fact]
+    public void OccursExpandedNamesAppearInBothJsonContracts()
+    {
+        // The expanded, indexed field names have to reach the external caller —
+        // in the flat spec it decodes with, and in the structure preview it
+        // builds its UI from. If OCCURS only worked internally, neither JSON
+        // would carry the copies and the app would see one LINE-ITEM, not three.
+        Assert.True(_actions.ParseCopybook(OccursCopybook, out var specJson, out var previewJson, out var error), error);
+
+        var specNames = JsonDocument.Parse(specJson).RootElement
+            .EnumerateArray().Select(f => f.GetProperty("Name").GetString()).ToList();
+        var previewNames = JsonDocument.Parse(previewJson).RootElement
+            .EnumerateArray().Select(f => f.GetProperty("attributeName").GetString()).ToList();
+
+        var expected = new[]
+        {
+            "ORDER-ID",
+            "LINE-ITEM(1)-ITEM-CODE", "LINE-ITEM(1)-ITEM-QTY",
+            "LINE-ITEM(2)-ITEM-CODE", "LINE-ITEM(2)-ITEM-QTY",
+            "LINE-ITEM(3)-ITEM-CODE", "LINE-ITEM(3)-ITEM-QTY",
+            "ORDER-NOTE",
+        };
+        Assert.Equal(expected, specNames);
+        Assert.Equal(expected, previewNames);
+
+        // The preview types map per iteration just like any other field.
+        var qty2 = JsonDocument.Parse(previewJson).RootElement.EnumerateArray()
+            .Single(f => f.GetProperty("attributeName").GetString() == "LINE-ITEM(2)-ITEM-QTY");
+        Assert.Equal("Integer", qty2.GetProperty("dataType").GetString());
+    }
+
+    [Fact]
+    public void OccursRecordDecodesAndEncodesThroughTheActionSurface()
+    {
+        Assert.True(_actions.ParseCopybook(OccursCopybook, out var specJson, out _, out var error), error);
+
+        // A 3-item order laid out by hand at the expected offsets:
+        // ORDER-ID(5) + 3 * (ITEM-CODE X(4) + ITEM-QTY 9(3)) + ORDER-NOTE X(6).
+        const string record = "42007" + "AB12007" + "CD34012" + "EF56000" + "RUSH  ";
+        Assert.True(_actions.DecodeRecords(specJson, record, out var recordsJson, out error), error);
+
+        var first = JsonDocument.Parse(recordsJson).RootElement[0];
+        Assert.Equal("AB12", first.GetProperty("LINE-ITEM(1)-ITEM-CODE").GetString());
+        Assert.Equal(12m, first.GetProperty("LINE-ITEM(2)-ITEM-QTY").GetDecimal());
+        Assert.Equal("EF56", first.GetProperty("LINE-ITEM(3)-ITEM-CODE").GetString());
+        Assert.Equal("RUSH", first.GetProperty("ORDER-NOTE").GetString());
+
+        Assert.True(_actions.EncodeRecords(specJson, recordsJson, out var reencoded, out error), error);
+        Assert.Equal(record + "\n", reencoded);
+    }
+
     // ---- ParseCopybook ----
 
     [Fact]

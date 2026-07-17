@@ -295,6 +295,95 @@ public class EbcdicCodecTests
 }
 
 /// <summary>
+/// A record carrying a real fixed-count OCCURS field, decoded and re-encoded
+/// byte-for-byte through the full codec — the same proof every other feature
+/// here gets. The OCCURS field is invisible to the codec: it operates on the
+/// expanded flat spec, where each iteration is an ordinary indexed field.
+/// </summary>
+public class OccursRoundtripTests
+{
+    // A group OCCURS (the harder shape) plus fields on both sides of it, and a
+    // COMP-3 leaf inside the repeated group so packed bytes survive per copy.
+    private const string Copybook = @"
+01  ORDER-REC.
+    05  ORDER-ID    PIC 9(5).
+    05  LINE-ITEM OCCURS 3 TIMES.
+        10  ITEM-CODE  PIC X(4).
+        10  ITEM-QTY   PIC 9(3).
+        10  ITEM-COST  PIC S9(5)V99 COMP-3.
+    05  ORDER-NOTE  PIC X(6).
+";
+
+    private static IReadOnlyList<FieldSpec> Spec() => CopybookParser.Parse(Copybook).Flat;
+
+    private static Dictionary<string, object> Sample() => new()
+    {
+        ["ORDER-ID"] = 42007m,
+        ["LINE-ITEM(1)-ITEM-CODE"] = "AB12",
+        ["LINE-ITEM(1)-ITEM-QTY"] = 7m,
+        ["LINE-ITEM(1)-ITEM-COST"] = 19.95m,
+        ["LINE-ITEM(2)-ITEM-CODE"] = "CD34",
+        ["LINE-ITEM(2)-ITEM-QTY"] = 12m,
+        ["LINE-ITEM(2)-ITEM-COST"] = -3.50m, // negative COMP-3 in a repeated field
+        ["LINE-ITEM(3)-ITEM-CODE"] = "EF56",
+        ["LINE-ITEM(3)-ITEM-QTY"] = 0m,
+        ["LINE-ITEM(3)-ITEM-COST"] = 0m,
+        ["ORDER-NOTE"] = "RUSH",
+    };
+
+    [Fact]
+    public void ExpandedLayoutTilesTheRecordWithTheExpectedWidth()
+    {
+        var spec = Spec();
+
+        // 11 leaves: ORDER-ID + 3 * (3 fields) + ORDER-NOTE.
+        Assert.Equal(11, spec.Count);
+
+        // 5 + 3 * (4 + 3 + ceil((7+1)/2)=4) + 6 = 5 + 33 + 6 = 44.
+        Assert.Equal(44, spec.Sum(f => f.Len));
+
+        var cursor = 0;
+        foreach (var f in spec)
+        {
+            Assert.Equal(cursor, f.Start);
+            cursor += f.Len;
+        }
+    }
+
+    [Fact]
+    public void RecordWithOccursSurvivesDecodeEncode()
+    {
+        var spec = Spec();
+        var encoded = FlatFileCodec.Encode(spec, new[] { Sample() });
+
+        var decoded = Assert.Single(FlatFileCodec.Decode(spec, encoded));
+        var sample = Sample();
+        foreach (var key in sample.Keys)
+            Assert.Equal(sample[key], decoded[key]);
+
+        // And the mirror direction: bytes -> values -> bytes is identical.
+        var reencoded = FlatFileCodec.Encode(spec, new[] { decoded });
+        Assert.Equal(
+            Encoding.Latin1.GetBytes(encoded),
+            Encoding.Latin1.GetBytes(reencoded));
+    }
+
+    [Fact]
+    public void EachIterationDecodesToItsOwnValue()
+    {
+        // Guards against every copy sharing one offset: the three ITEM-CODEs must
+        // come back distinct, in order.
+        var spec = Spec();
+        var decoded = Assert.Single(FlatFileCodec.Decode(spec, FlatFileCodec.Encode(spec, new[] { Sample() })));
+
+        Assert.Equal("AB12", decoded["LINE-ITEM(1)-ITEM-CODE"]);
+        Assert.Equal("CD34", decoded["LINE-ITEM(2)-ITEM-CODE"]);
+        Assert.Equal("EF56", decoded["LINE-ITEM(3)-ITEM-CODE"]);
+        Assert.Equal(-3.50m, decoded["LINE-ITEM(2)-ITEM-COST"]);
+    }
+}
+
+/// <summary>
 /// Undelimited fixed-length records (the mainframe's RECFM=F shape): the file
 /// is a bare concatenation and the layout's own record length is the only
 /// thing that says where one record stops.
