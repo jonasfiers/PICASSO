@@ -112,6 +112,7 @@ Integration Studio and Service Studio are proprietary, Windows-only GUI tools. N
 - **[`src/Picasso.Extension/README-IntegrationStudio.md`](src/Picasso.Extension/README-IntegrationStudio.md)** — creating the Extension, defining the five actions, referencing the DLLs, building, importing.
 - **[`docs/outsystems-app-spec.md`](docs/outsystems-app-spec.md)** — the demo app's screens, widgets, and Structures.
 - **[`docs/forge-submission.md`](docs/forge-submission.md)** — publishing to Forge: listing fields, icon, best-practice checklist, and the O11-vs-ODC compatibility question.
+- **[`docs/mainframe-ingestion.md`](docs/mainframe-ingestion.md)** — pulling a real extract off a mainframe via SFTP and decoding it directly, including the `Binary Data` handling this would still need.
 
 ### The action surface
 
