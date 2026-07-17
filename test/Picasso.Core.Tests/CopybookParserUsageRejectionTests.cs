@@ -1,41 +1,36 @@
 using System;
 using Picasso.Core;
+using Picasso.Core.Models;
 using Xunit;
 
 namespace Picasso.Core.Tests;
 
 /// <summary>
-/// Every binary/float/packed/aligned USAGE clause must be rejected with a named
-/// FormatException rather than silently mis-sized. Before this behaviour, the
-/// clause loop's default case skipped these one token at a time, producing a
-/// wrong-but-plausible DISPLAY-sized layout — e.g. PIC 9(4) COMP (a 2-byte binary
-/// halfword) reported as 4 bytes, and COMP-1/COMP-2 (which carry no PIC) making the
-/// whole field vanish and shifting every following offset. This is the last silent-
-/// miscompute hole: after it, an unsupported usage parses correctly or fails loudly.
+/// The float/Micro-Focus-binary/aligned/pointer/DBCS USAGE clauses that remain
+/// unsupported must be rejected with a named FormatException rather than silently
+/// mis-sized. Before this behaviour, the clause loop's default case skipped these
+/// one token at a time, producing a wrong-but-plausible DISPLAY-sized layout, and
+/// COMP-1/COMP-2 (which carry no PIC) made the whole field vanish and shifted every
+/// following offset. Binary COMP/COMP-4/COMP-5/BINARY and PACKED-DECIMAL are now
+/// SUPPORTED and no longer appear here — see <see cref="BinaryTests"/>; what stays
+/// rejected is float (COMP-1/COMP-2), the Micro Focus COMP-6/COMP-X, and the
+/// pointer/index/alignment/DBCS family.
 /// </summary>
 public class CopybookParserUsageRejectionTests
 {
     // Each entry: the exact USAGE token as written in the copybook, and the
     // usage label that must appear in the rejection message so a caller can tell
-    // which usage tripped it. Both spellings (COMP and COMPUTATIONAL) are covered
-    // where COBOL allows them.
+    // which usage tripped it. Both spellings (COMP-n and COMPUTATIONAL-n) are
+    // covered where COBOL allows them.
     [Theory]
-    [InlineData("COMP", "COMP")]
-    [InlineData("COMPUTATIONAL", "COMP")]
     [InlineData("COMP-1", "COMP-1")]
     [InlineData("COMPUTATIONAL-1", "COMP-1")]
     [InlineData("COMP-2", "COMP-2")]
     [InlineData("COMPUTATIONAL-2", "COMP-2")]
-    [InlineData("COMP-4", "COMP-4")]
-    [InlineData("COMPUTATIONAL-4", "COMP-4")]
-    [InlineData("COMP-5", "COMP-5")]
-    [InlineData("COMPUTATIONAL-5", "COMP-5")]
     [InlineData("COMP-6", "COMP-6")]
     [InlineData("COMPUTATIONAL-6", "COMP-6")]
     [InlineData("COMP-X", "COMP-X")]
     [InlineData("COMPUTATIONAL-X", "COMP-X")]
-    [InlineData("BINARY", "BINARY")]
-    [InlineData("PACKED-DECIMAL", "PACKED-DECIMAL")]
     [InlineData("INDEX", "INDEX")]
     [InlineData("POINTER", "POINTER")]
     [InlineData("POINTER-32", "POINTER-32")]
@@ -60,16 +55,16 @@ public class CopybookParserUsageRejectionTests
     }
 
     [Fact]
-    public void RejectsUsageIsComputationalForm()
+    public void UsageIsComputationalFormParsesAsBinary()
     {
         // USAGE and IS fall through the default skip, so "USAGE IS COMPUTATIONAL",
-        // "USAGE COMP" and bare "COMP" all reach the COMP token identically. This
-        // pins the fullest spelling so a regression that special-cases USAGE/IS
-        // wouldn't slip an unsupported usage past.
-        var ex = Assert.Throws<FormatException>(
-            () => CopybookParser.Parse("01  R.\n    05  A PIC 9(4) USAGE IS COMPUTATIONAL.\n"));
-        Assert.Contains("COMP", ex.Message);
-        Assert.Contains("'A'", ex.Message);
+        // "USAGE COMP" and bare "COMP" all reach the COMP token identically. COMP is
+        // now supported binary, so the fullest spelling must parse to a 2-byte binary
+        // halfword (PIC 9(4) -> 2 bytes), not be rejected.
+        var parsed = CopybookParser.Parse("01  R.\n    05  A PIC 9(4) USAGE IS COMPUTATIONAL.\n");
+        Assert.Single(parsed.Flat);
+        Assert.Equal(FieldType.Binary, parsed.Flat[0].Type);
+        Assert.Equal(2, parsed.Flat[0].Len);
     }
 
     [Fact]
@@ -94,14 +89,14 @@ public class CopybookParserUsageRejectionTests
     }
 
     [Fact]
-    public void PackedDecimalIsRejectedNotAliasedToComp3()
+    public void PackedDecimalIsAliasedToComp3()
     {
-        // PACKED-DECIMAL is a synonym for COMP-3 in COBOL, but aliasing it would be
-        // out of scope for this pass: it is rejected like the rest, not silently
-        // treated as supported packed decimal.
-        var ex = Assert.Throws<FormatException>(
-            () => CopybookParser.Parse("01  R.\n    05  A PIC 9(5) PACKED-DECIMAL.\n"));
-        Assert.Contains("PACKED-DECIMAL", ex.Message);
+        // PACKED-DECIMAL is byte-identical to COMP-3, so it now aliases to the same
+        // packed-decimal path: PIC 9(5) -> a 3-byte Comp3 field, not a rejection.
+        var parsed = CopybookParser.Parse("01  R.\n    05  A PIC 9(5) PACKED-DECIMAL.\n");
+        Assert.Single(parsed.Flat);
+        Assert.Equal(FieldType.Comp3, parsed.Flat[0].Type);
+        Assert.Equal(3, parsed.Flat[0].Len);
     }
 
     [Fact]
