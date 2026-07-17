@@ -33,6 +33,65 @@ public class EditedPicTests
         Assert.Equal(22, field.Len);
     }
 
+    // ---- Decimal-point edited pictures parse THROUGH the full copybook parse ----
+    // These go via CopybookParser.Parse (hence SplitStatements), the path the
+    // isolated Pic.ParsePicClause tests never exercised — where a '.' in the PIC
+    // was wrongly treated as the statement terminator.
+
+    [Theory]
+    [InlineData("ZZ,ZZ9.99", 9)]
+    [InlineData("$$$,$$9.99", 10)]   // the README's advertised example
+    [InlineData("ZZ,ZZ9.99CR", 11)]
+    public void DecimalPointEditedPictureParsesThroughFullCopybookParse(string picture, int expectedWidth)
+    {
+        var parsed = CopybookParser.Parse(
+            "01 REC.\n" +
+            $"   05 AMT PIC {picture}.\n");
+
+        var field = parsed.Flat.Single();
+        Assert.Equal(FieldType.Text, field.Type);
+        Assert.Equal(expectedWidth, field.Len);
+    }
+
+    [Fact]
+    public void DecimalPointEditedFieldBetweenTwoFieldsKeepsTrailingOffsetCorrect()
+    {
+        // The bug's real cost was a split statement, but the offset-shift guard
+        // still matters: a decimal-edited field between two fields must leave the
+        // trailing field at edited.Start + width.
+        var parsed = CopybookParser.Parse(
+            "01 REC.\n" +
+            "   05 LEAD PIC X(4).\n" +
+            "   05 AMT  PIC ZZ,ZZ9.99.\n" +   // width 9
+            "   05 C    PIC X(4).\n");
+
+        var lead = parsed.Flat[0];
+        var amt = parsed.Flat[1];
+        var c = parsed.Flat[2];
+
+        Assert.Equal(0, lead.Start);
+        Assert.Equal(4, amt.Start);
+        Assert.Equal(9, amt.Len);
+        Assert.Equal(amt.Start + amt.Len, c.Start);
+        Assert.Equal(13, c.Start);
+        Assert.Equal(17, parsed.Root.Len);
+    }
+
+    [Fact]
+    public void TwoDecimalEditedFieldsOnConsecutiveLinesBothParse()
+    {
+        // Guards that a '.'-terminated decimal-edited statement doesn't bleed into
+        // the next line: two adjacent decimal-edited fields must stay two fields.
+        var parsed = CopybookParser.Parse(
+            "01 REC.\n" +
+            "   05 A PIC $$$,$$9.99.\n" +
+            "   05 B PIC ZZ,ZZ9.99.\n");
+
+        Assert.Equal(new[] { "A", "B" }, parsed.Flat.Select(f => f.Name));
+        Assert.Equal(10, parsed.Flat[0].Len);
+        Assert.Equal(9, parsed.Flat[1].Len);
+    }
+
     /// <summary>
     /// The offset-shift guard: an edited field sitting BETWEEN two ordinary
     /// fields. The trailing field's Start must equal the edited field's Start

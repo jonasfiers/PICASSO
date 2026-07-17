@@ -155,6 +155,28 @@ public class QuoteAwareSplitTests
         Assert.Equal("05 A PIC X(20) VALUE 'a.b.c'", statements[0]);
     }
 
+    [Fact]
+    public void SplitStatements_DecimalPointInPicture_IsNotATerminator()
+    {
+        // The decimal point of an edited picture is followed by a digit, not by
+        // whitespace, so it is data — not the statement terminator. The trailing
+        // '.' (followed by end-of-input) is the real terminator.
+        var statements = CopybookParser.SplitStatements("05 B PIC ZZ,ZZ9.99.");
+
+        Assert.Single(statements);
+        Assert.Equal("05 B PIC ZZ,ZZ9.99", statements[0]);
+    }
+
+    [Fact]
+    public void SplitStatements_PeriodInNumericLiteral_IsNotATerminator()
+    {
+        // Same rule hardens numeric literals: VALUE 1.5 must not split into "1"+"5".
+        var statements = CopybookParser.SplitStatements("05 R PIC 9V9 VALUE 1.5.");
+
+        Assert.Single(statements);
+        Assert.Equal("05 R PIC 9V9 VALUE 1.5", statements[0]);
+    }
+
     // ---- Edge cases verified during review, pinned here as regression guards ----
 
     [Fact]

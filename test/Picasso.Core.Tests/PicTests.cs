@@ -156,6 +156,27 @@ public class PicTests
         Assert.Equal(5, Pic.ParsePicClause("9(4)B").Length);  // 4 + 1
     }
 
+    [Theory]
+    [InlineData("9S9")]
+    [InlineData("SS9")]
+    [InlineData("99S")]
+    public void RejectsSignAnywhereButLeftmost(string picture)
+    {
+        // S is legal only as the leftmost picture character. A leading S is
+        // stripped; any other S is a genuinely-invalid character and must reject,
+        // matching the pre-rewrite [9XAV] behaviour.
+        Assert.Throws<System.FormatException>(() => Pic.ParsePicClause(picture));
+    }
+
+    [Fact]
+    public void LeadingSignStillParsesAsSignedNumeric()
+    {
+        var spec = Pic.ParsePicClause("S9(5)");
+        Assert.Equal(PicCategory.Numeric, spec.Category);
+        Assert.Equal(5, spec.Digits);
+        Assert.True(spec.Signed);
+    }
+
     [Fact]
     public void RejectsUnknownCharacterInsideEditedPicture()
     {
