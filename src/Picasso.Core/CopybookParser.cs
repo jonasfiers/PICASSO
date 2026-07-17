@@ -443,11 +443,11 @@ public static class CopybookParser
             };
         }
 
-        if (pic.Signed && !signSeparate)
-            throw new FormatException(
-                $"Signed DISPLAY numeric field '{name}' needs an explicit SIGN IS LEADING/TRAILING SEPARATE clause " +
-                "(overpunched sign encoding is not supported).");
-
+        // A signed DISPLAY numeric without SIGN IS ... SEPARATE carries its sign
+        // as an OVERPUNCH in the zone nibble of the trailing digit (default) or
+        // leading digit (SIGN IS LEADING) — no extra byte. See Overpunch.cs and
+        // FlatFileCodec's numeric decode/encode. Both the separate and overpunch
+        // forms land here; only the separate form adds a sign byte to the width.
         return new FieldSpec
         {
             Name = name,
