@@ -294,6 +294,15 @@ public class OdoTests
         Assert.Contains("depending field", ex.Message);
     }
 
+    [Fact]
+    public void DecodeFailsLoudWhenRecordTooShortToHoldDependingField()
+    {
+        var parsed = CopybookParser.Parse(ElementaryOdo); // dep CNT is 2 bytes
+        var ex = Assert.Throws<FormatException>(() => FlatFileCodec.Decode(parsed, "0\n"));
+        Assert.Contains("too short", ex.Message);
+        Assert.Contains("CNT", ex.Message);
+    }
+
     // ---- Fail loud: structural rejections at parse ----
 
     [Fact]

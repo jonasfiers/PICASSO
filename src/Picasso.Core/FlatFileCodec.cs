@@ -196,6 +196,12 @@ public static class FlatFileCodec
     private static int ReadCountFromRecord(string text, int offset, OdoInfo odo, CharacterEncoding encoding)
     {
         var dep = odo.DependingField;
+        if (offset + dep.Start + dep.Len > text.Length)
+            throw new FormatException(
+                $"Record starting at offset {offset} is too short to contain its depending field " +
+                $"'{odo.DependsOn}' (needs {dep.Start + dep.Len} bytes, has {text.Length - offset}). " +
+                "The layout does not match this file.");
+
         var raw = text.Substring(offset + dep.Start, dep.Len);
         var value = DecodeField(raw, dep, encoding);
         return ToCount(value, odo.DependsOn);
