@@ -189,7 +189,7 @@ public static class CopybookParser
         public int OccursCount = 1;
     }
 
-    private static ParsedStatement ParseStatement(string statement)
+    private static ParsedStatement? ParseStatement(string statement)
     {
         var tokens = statement.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
         if (tokens.Length < 2)
@@ -198,9 +198,21 @@ public static class CopybookParser
         if (!int.TryParse(tokens[0], out var level))
             throw new FormatException($"Expected a level number, got \"{tokens[0]}\" in \"{statement}\".");
 
-        if (level == 66 || level == 88)
+        // Level 88 is a condition-name: metadata on the immediately-preceding
+        // data item (its VALUE clause names states, e.g. 88 STATUS-OK VALUE 'A')
+        // that occupies zero storage. It's not a field, adds no bytes, and must
+        // not touch the level stack or any offset — so it's tolerated and
+        // silently dropped here (null == "skip this statement"), exactly as the
+        // parser already ignores INDEXED BY / VALUE / JUSTIFIED. Its body
+        // (VALUE/VALUES ARE/THRU literals) is never interpreted.
+        if (level == 88)
+            return null;
+
+        // Level 66 (RENAMES) is a different construct with different semantics
+        // and stays rejected with its own named error.
+        if (level == 66)
             throw new FormatException(
-                $"Level {level} ({(level == 66 ? "RENAMES" : "condition-name")}) is not supported: \"{statement}\".");
+                $"Level {level} (RENAMES) is not supported: \"{statement}\".");
 
         var name = tokens[1];
 
@@ -487,6 +499,13 @@ public static class CopybookParser
         foreach (var statementText in statements)
         {
             var parsed = ParseStatement(statementText);
+
+            // A null parse is a tolerated-and-ignored statement (a level-88
+            // condition-name): no node, and — crucially — it never touches the
+            // level stack, so it can't shift an offset or reparent a sibling.
+            if (parsed is null)
+                continue;
+
             var node = new CopybookNode(parsed.Name, parsed.LevelNumber)
             {
                 Field = parsed.Field,

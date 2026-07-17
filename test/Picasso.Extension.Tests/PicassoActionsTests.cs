@@ -361,11 +361,14 @@ public class PicassoActionsTests
     }
 
     [Fact]
-    public void ParseCopybookReportsUnsupportedLevel88()
+    public void ParseCopybookToleratesAndIgnoresLevel88()
     {
+        // A level-88 condition-name occupies zero storage, so it's tolerated and
+        // dropped: parsing succeeds and only the real field 'A' is in the layout.
         var source = "01  R.\n    05  A PIC X(3).\n    88  A-IS-X VALUE 'X'.\n";
-        Assert.False(_actions.ParseCopybook(source, out _, out _, out var error));
-        Assert.Contains("88", error);
+        Assert.True(_actions.ParseCopybook(source, out var specJson, out _, out var error), error);
+        Assert.DoesNotContain("A-IS-X", specJson);
+        Assert.Contains("\"A\"", specJson);
     }
 
     [Fact]

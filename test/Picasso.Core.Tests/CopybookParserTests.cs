@@ -376,13 +376,110 @@ public class CopybookParserTests
 
     [Theory]
     [InlineData(66, "RENAMES")]
-    [InlineData(88, "condition-name")]
     public void RejectsUnsupportedLevelNumbers(int level, string expectedInMessage)
     {
-        var source = $"01  R.\n    05  A PIC X(3).\n    {level}  B-COND VALUE 'X'.\n";
+        var source = $"01  R.\n    05  A PIC X(3).\n    {level}  B-COND RENAMES A.\n";
         var ex = Assert.Throws<FormatException>(() => CopybookParser.Parse(source));
         Assert.Contains(expectedInMessage, ex.Message);
         Assert.Contains(level.ToString(), ex.Message);
+    }
+
+    // ---- Level-88 condition-names: tolerated and ignored ----
+
+    /// <summary>
+    /// A level-88 condition-name is metadata on the preceding data item and
+    /// occupies zero storage. It must be silently dropped: only the real field
+    /// appears, and every offset/length matches the same copybook with the 88
+    /// lines removed.
+    /// </summary>
+    [Fact]
+    public void ElementaryFieldFollowedByCondition88sIsUnaffected()
+    {
+        var with = CopybookParser.Parse(
+            "01  R.\n" +
+            "    05  STATUS-CODE PIC X(1).\n" +
+            "        88  STATUS-OK    VALUE 'A'.\n" +
+            "        88  STATUS-ERROR VALUE 'E'.\n" +
+            "    05  AMOUNT PIC 9(4).\n");
+
+        var without = CopybookParser.Parse(
+            "01  R.\n" +
+            "    05  STATUS-CODE PIC X(1).\n" +
+            "    05  AMOUNT PIC 9(4).\n");
+
+        Assert.Equal(new[] { "STATUS-CODE", "AMOUNT" }, with.Flat.Select(f => f.Name));
+        Assert.Equal(
+            without.Flat.Select(f => (f.Name, f.Start, f.Len)),
+            with.Flat.Select(f => (f.Name, f.Start, f.Len)));
+        Assert.Equal(without.Root.Len, with.Root.Len);
+        Assert.Equal(5, with.Root.Len);
+    }
+
+    /// <summary>
+    /// The 88 body is never interpreted — multiple values, a THRU range, a
+    /// VALUES ARE form, and a literal containing a period (which the quote-aware
+    /// splitter keeps in one statement) are all tolerated with the layout intact.
+    /// </summary>
+    [Fact]
+    public void Condition88BodyFormsAreAllToleratedWithoutAffectingLayout()
+    {
+        var parsed = CopybookParser.Parse(
+            "01  R.\n" +
+            "    05  GRADE PIC X(1).\n" +
+            "        88  GOOD       VALUE 'A' 'B' 'C'.\n" +
+            "        88  RANGE      VALUE 'A' THRU 'Z'.\n" +
+            "        88  RANGE-WORD VALUE 'A' THROUGH 'Z'.\n" +
+            "        88  SET-FORM   VALUES ARE 'X' 'Y'.\n" +
+            "        88  MSG        VALUE 'a.b'.\n" +
+            "    05  TAIL PIC 9(2).\n");
+
+        Assert.Equal(new[] { "GRADE", "TAIL" }, parsed.Flat.Select(f => f.Name));
+        Assert.Equal(new[] { 0, 1 }, parsed.Flat.Select(f => f.Start));
+        Assert.Equal(3, parsed.Root.Len);
+    }
+
+    /// <summary>
+    /// 88s nested under a group item are dropped without disturbing the group's
+    /// children or their offsets.
+    /// </summary>
+    [Fact]
+    public void Condition88sUnderAGroupItemAreIgnored()
+    {
+        var parsed = CopybookParser.Parse(
+            "01  R.\n" +
+            "    05  FLAGS.\n" +
+            "        10  FLAG-A PIC X(1).\n" +
+            "            88  FLAG-A-ON VALUE '1'.\n" +
+            "        10  FLAG-B PIC X(1).\n" +
+            "            88  FLAG-B-ON VALUE '1'.\n" +
+            "    05  TRAILER PIC X(3).\n");
+
+        var flags = Assert.Single(parsed.Root.Children, c => c.Name == "FLAGS");
+        Assert.True(flags.IsGroup);
+        Assert.Equal(new[] { "FLAG-A", "FLAG-B" }, flags.Children.Select(c => c.Name));
+
+        Assert.Equal(
+            new[] { ("FLAG-A", 0, 1), ("FLAG-B", 1, 1), ("TRAILER", 2, 3) },
+            parsed.Flat.Select(f => (f.Name, f.Start, f.Len)));
+        Assert.Equal(5, parsed.Root.Len);
+    }
+
+    /// <summary>
+    /// An 88 as the very last line of the copybook must not leave a dangling
+    /// node or otherwise disturb the record.
+    /// </summary>
+    [Fact]
+    public void Condition88AsFinalLineIsIgnored()
+    {
+        var parsed = CopybookParser.Parse(
+            "01  R.\n" +
+            "    05  A PIC X(3).\n" +
+            "    05  B PIC X(2).\n" +
+            "        88  B-SET VALUE 'ZZ'.\n");
+
+        Assert.Equal(new[] { "A", "B" }, parsed.Flat.Select(f => f.Name));
+        Assert.Equal(new[] { 0, 3 }, parsed.Flat.Select(f => f.Start));
+        Assert.Equal(5, parsed.Root.Len);
     }
 
     [Fact]
