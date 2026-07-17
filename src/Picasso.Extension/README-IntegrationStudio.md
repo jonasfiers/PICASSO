@@ -90,9 +90,15 @@ All parameters are **Text** unless noted.
 | `Success` | Output | Boolean |
 | `CopybookSource` | Output | Text |
 | `SampleDataText` | Output | Text |
+| `TextEncoding` | Output | Text |
+| `RecordFormat` | Output | Text |
 | `ErrorMessage` | Output | Text |
 
-All ten bundled samples come with data attached. If a sample ever ships without, `SampleDataText` comes back empty and `Success` is still True — absent data is not a failure. Branch on `HasSampleData` from `ListSampleIds` rather than on an empty string.
+`TextEncoding` and `RecordFormat` report how *this sample's* data must be decoded, in the same vocabulary `DecodeRecords` takes — pass them straight through. Ten samples report `LATIN1`/`DELIMITED`; `dtar020-rec`, the real mainframe extract, reports `EBCDIC`/`FIXED`. They're outputs rather than something you assume because neither is detectable from the bytes: decode that one with the defaults and you get plausible garbage rather than an error.
+
+There's a shorter overload without those two outputs. It works for the ten default samples and deliberately fails on `dtar020-rec` — it can't report what that sample needs, and handing back bytes that decode to garbage unmarked would be worse than refusing.
+
+All eleven bundled samples come with data attached. If a sample ever ships without, `SampleDataText` comes back empty and `Success` is still True — absent data is not a failure. Branch on `HasSampleData` from `ListSampleIds` rather than on an empty string.
 
 ### `ListSampleIds`
 
@@ -152,10 +158,12 @@ public void MssEncodeRecords(string ssFlatSpecJson, string ssRecordsJson, string
 }
 
 public void MssGetSampleCopybook(string ssSampleId, out bool ssSuccess,
-    out string ssCopybookSource, out string ssSampleDataText, out string ssErrorMessage)
+    out string ssCopybookSource, out string ssSampleDataText,
+    out string ssTextEncoding, out string ssRecordFormat, out string ssErrorMessage)
 {
     ssSuccess = _picasso.GetSampleCopybook(ssSampleId,
-        out ssCopybookSource, out ssSampleDataText, out ssErrorMessage);
+        out ssCopybookSource, out ssSampleDataText,
+        out ssTextEncoding, out ssRecordFormat, out ssErrorMessage);
 }
 
 public void MssListSampleIds(out string ssSampleIdsJson)

@@ -6,7 +6,7 @@ Every other bundled sample is either CATALOG-74's own layout or a synthetic one 
 
 - **`DTAR020-ORIGINAL.cbl`** — exactly as downloaded. Traditional fixed-format COBOL source: columns 1–6 are line-sequence numbers, column 7 is the comment indicator.
 - **`DTAR020.cpy`** — byte-for-byte the original, with a synthetic `01 DTAR020-REC.` line prepended and nothing else changed. Sequence numbers and column-7 comment indicators are left exactly as they arrived; the parser handles them. This is the copybook PICASSO actually parses.
-- **`DTAR020.bin`** — the real binary data, unmodified.
+- **`DTAR020.bin`** — the real binary data, unmodified. Bundled as this sample's data; needs `EBCDIC` + `FIXED`, which the sample reports.
 
 ## What running the real thing against PICASSO actually found
 
@@ -28,6 +28,6 @@ Four real gaps surfaced that no synthetic copybook had, because synthetic copybo
 
 **All of which means the whole file now works end to end.** `RoundtripsTheEntireRealFile_ByteForByte` decodes all 379 records — fixed-format copybook, EBCDIC text, packed decimals, no delimiters — and re-encodes them to the same 10,233 bytes, through nothing but the public API.
 
-`DTAR020.bin` still isn't offered as selectable sample data through `GetSampleCopybook`, but the reason is no longer that PICASSO can't read it. It's that `SampleDescriptor` has no way to say "this one needs `EBCDIC` and `FIXED`". Handing a caller bytes that decode to garbage under the default settings, with nothing marking them as different, would be the same silent-wrong-answer failure this sample exists to expose. Serving it needs that metadata first.
+`DTAR020.bin` is now offered as selectable sample data through `GetSampleCopybook`, which reports `TextEncoding = "EBCDIC"` and `RecordFormat = "FIXED"` alongside the bytes. Those aren't advisory: the settings are carried on the sample because they aren't detectable from the data, and handing a caller these bytes unmarked would decode to plausible garbage — the silent wrong answer this sample exists to expose. It's the only bundled sample that needs anything other than the defaults, which is exactly why it's worth shipping.
 
 Gap 4 remains open — see the main [README](../../../../README.md)'s "Not supported (v1)" section.

@@ -52,6 +52,10 @@ Define these under **Data → Structures**. They mirror the JSON the actions emi
 | `Filename` | Text |
 | `Description` | Text |
 | `HasSampleData` | Boolean |
+| `TextEncoding` | Text |
+| `RecordFormat` | Text |
+
+`TextEncoding` and `RecordFormat` say how that sample's data must be decoded, in the exact vocabulary `DecodeRecords` accepts — pass them through untouched rather than mapping or assuming. Ten samples report `LATIN1`/`DELIMITED`; `dtar020-rec`, the real mainframe extract, reports `EBCDIC`/`FIXED`. Neither is detectable from the bytes, which is why the sample states them.
 
 ---
 
@@ -97,10 +101,12 @@ Leave the input editable. Watching a hand-typed `PIC` clause change the derived 
 
 1. `GetSampleCopybook(SelectedSampleId)`.
 2. If not `Success` → `ErrorMessage`, stop.
-3. `CopybookSource = CopybookSource` (out), `FixedWidthText = SampleDataText` (out).
+3. `CopybookSource = CopybookSource` (out), `FixedWidthText = SampleDataText` (out), `TextEncoding = TextEncoding` (out), `RecordFormat = RecordFormat` (out).
 4. Call `DoParse`.
 
-All ten bundled samples come with data attached, so this normally populates. Absent data is not an error, though — disable the Run button on `FixedWidthText = ""` rather than treating it as a failure.
+Hold `TextEncoding` and `RecordFormat` as local variables and pass them to every `DecodeRecords`/`EncodeRecords` call for that sample. Wiring the four-output `GetSampleCopybook` instead will work for ten of the eleven samples and fail loudly on `dtar020-rec` — deliberately, since it can't report what that one needs.
+
+All eleven bundled samples come with data attached, so this normally populates. Absent data is not an error, though — disable the Run button on `FixedWidthText = ""` rather than treating it as a failure.
 
 #### Action: `DoParse`
 

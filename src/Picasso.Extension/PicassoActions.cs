@@ -237,6 +237,40 @@ public sealed class PicassoActions
     }
 
     /// <summary>
+    /// The names meaning "the default" on the way out. Blank means the same on
+    /// the way in, but the actions report these instead: a caller showing a
+    /// sample's settings in a UI should see a word, not an empty string.
+    /// </summary>
+    private const string DefaultEncodingName = "LATIN1";
+    private const string DefaultRecordFormatName = "DELIMITED";
+
+    /// <summary>
+    /// <see cref="ParseEncoding"/>'s inverse — every name it emits parses back
+    /// to the same value, so a sample's reported settings can be handed
+    /// straight to DecodeRecords. Asserted by test.
+    /// </summary>
+    private static string NameOf(CharacterEncoding encoding)
+    {
+        switch (encoding)
+        {
+            case CharacterEncoding.Latin1: return DefaultEncodingName;
+            case CharacterEncoding.Ebcdic037: return "EBCDIC";
+            default: throw new ArgumentOutOfRangeException(nameof(encoding), encoding, "Unmapped encoding.");
+        }
+    }
+
+    /// <summary><see cref="ParseRecordFormat"/>'s inverse. Asserted by test.</summary>
+    private static string NameOf(RecordFormat format)
+    {
+        switch (format)
+        {
+            case RecordFormat.NewlineDelimited: return DefaultRecordFormatName;
+            case RecordFormat.FixedLength: return "FIXED";
+            default: throw new ArgumentOutOfRangeException(nameof(format), format, "Unmapped record format.");
+        }
+    }
+
+    /// <summary>
     /// Maps the action surface's encoding name onto <see cref="CharacterEncoding"/>.
     /// Unknown names throw: this boundary turns exceptions into a false result
     /// plus errorMessage, so a typo surfaces as a named failure rather than a
@@ -266,10 +300,14 @@ public sealed class PicassoActions
     // ---- Action 4: GetSampleCopybook ----
 
     /// <summary>
-    /// Loads a bundled copybook and its data by id. Every sample currently
-    /// bundled has data; if one ever ships without,
-    /// <paramref name="sampleDataText"/> comes back empty and the action still
-    /// returns true — absent data is not a failure.
+    /// Loads a bundled copybook and its data by id, assuming the data uses the
+    /// default ASCII, newline-delimited settings.
+    ///
+    /// Fails for a sample whose data doesn't — it has no way to report the
+    /// settings, and handing back bytes that decode to garbage under the
+    /// defaults, unmarked, is the silent wrong answer this project exists to
+    /// avoid. Use the overload with the TextEncoding/RecordFormat outputs;
+    /// it works for every sample.
     /// </summary>
     public bool GetSampleCopybook(
         string sampleId,
@@ -277,14 +315,59 @@ public sealed class PicassoActions
         out string sampleDataText,
         out string errorMessage)
     {
+        if (!GetSampleCopybook(
+                sampleId, out copybookSource, out sampleDataText,
+                out var textEncoding, out var recordFormat, out errorMessage))
+            return false;
+
+        if (textEncoding == DefaultEncodingName && recordFormat == DefaultRecordFormatName)
+            return true;
+
         copybookSource = "";
         sampleDataText = "";
+        errorMessage =
+            $"Sample '{sampleId}' needs TextEncoding='{textEncoding}' and RecordFormat='{recordFormat}' " +
+            "to decode correctly, which this action cannot report. Use the GetSampleCopybook overload " +
+            "that also returns TextEncoding and RecordFormat, and pass them to DecodeRecords.";
+        return false;
+    }
+
+    /// <summary>
+    /// Loads a bundled copybook and its data by id, along with the
+    /// <paramref name="textEncoding"/> and <paramref name="recordFormat"/> that
+    /// data must be decoded with — pass both straight to
+    /// <see cref="DecodeRecords(string,string,string,string,out string,out string)"/>.
+    /// They're outputs rather than something the caller guesses because neither
+    /// is detectable from the bytes.
+    ///
+    /// Every sample currently bundled has data; if one ever ships without,
+    /// <paramref name="sampleDataText"/> comes back empty and the action still
+    /// returns true — absent data is not a failure.
+    /// </summary>
+    public bool GetSampleCopybook(
+        string sampleId,
+        out string copybookSource,
+        out string sampleDataText,
+        out string textEncoding,
+        out string recordFormat,
+        out string errorMessage)
+    {
+        copybookSource = "";
+        sampleDataText = "";
+        textEncoding = DefaultEncodingName;
+        recordFormat = DefaultRecordFormatName;
         errorMessage = "";
 
         try
         {
-            if (SampleLibrary.TryGet(sampleId ?? "", out copybookSource, out sampleDataText))
+            if (SampleLibrary.TryGet(
+                    sampleId ?? "", out copybookSource, out sampleDataText,
+                    out var encoding, out var format))
+            {
+                textEncoding = NameOf(encoding);
+                recordFormat = NameOf(format);
                 return true;
+            }
 
             errorMessage =
                 $"Unknown sample id '{sampleId}'. Known ids: {string.Join(", ", SampleLibrary.Ids())}.";
@@ -312,6 +395,8 @@ public sealed class PicassoActions
                     FileName = s.FileName,
                     Description = s.Description,
                     HasSampleData = s.HasSampleData,
+                    TextEncoding = NameOf(s.TextEncoding),
+                    RecordFormat = NameOf(s.RecordFormat),
                 })
                 .ToList(),
             Json);
@@ -479,5 +564,13 @@ public sealed class PicassoActions
         [JsonPropertyName("filename")] public string FileName { get; set; } = "";
         [JsonPropertyName("description")] public string Description { get; set; } = "";
         [JsonPropertyName("hasSampleData")] public bool HasSampleData { get; set; }
+
+        /// <summary>
+        /// The settings this sample's data needs, in the exact vocabulary
+        /// DecodeRecords accepts — so an app can pass them through untouched
+        /// rather than mapping or guessing.
+        /// </summary>
+        [JsonPropertyName("textEncoding")] public string TextEncoding { get; set; } = "";
+        [JsonPropertyName("recordFormat")] public string RecordFormat { get; set; } = "";
     }
 }

@@ -13,12 +13,12 @@ public class PicassoActionsTests
 {
     private readonly PicassoActions _actions = new();
 
-    /// <summary>Every bundled sample — all ten now ship with data attached.</summary>
+    /// <summary>Every bundled sample — all eleven ship with data attached.</summary>
     public static TheoryData<string> SamplesWithData => new()
     {
         "user-rec", "user-auth-rec", "group-rec", "member-rec",
         "expense-rec", "share-rec", "balance-rec", "portrait-rec",
-        "amount-owed-rec", "amount-paid-rec",
+        "amount-owed-rec", "amount-paid-rec", "dtar020-rec",
     };
 
     // ---- The end-to-end contract ----
@@ -27,15 +27,93 @@ public class PicassoActionsTests
     [MemberData(nameof(SamplesWithData))]
     public void SampleSurvivesTheFullActionRoundtrip(string sampleId)
     {
-        // The whole surface in the order the demo app calls it. If the JSON
-        // contract loses anything — a scale, a sign flag, a COMP-3 byte — the
-        // re-encoded text stops matching and this fails.
-        Assert.True(_actions.GetSampleCopybook(sampleId, out var copybook, out var data, out var error), error);
+        // The whole surface in the order the demo app calls it, with each
+        // sample decoded using the settings it reports rather than assumed
+        // ones. If the JSON contract loses anything — a scale, a sign flag, a
+        // COMP-3 byte — the re-encoded text stops matching and this fails.
+        //
+        // dtar020-rec is the real proof: a genuine mainframe extract, EBCDIC
+        // and undelimited, surviving the same trip as everything else purely
+        // on the strength of what its descriptor says about it.
+        Assert.True(_actions.GetSampleCopybook(
+            sampleId, out var copybook, out var data,
+            out var textEncoding, out var recordFormat, out var error), error);
+
         Assert.True(_actions.ParseCopybook(copybook, out var specJson, out _, out error), error);
-        Assert.True(_actions.DecodeRecords(specJson, data, out var recordsJson, out error), error);
-        Assert.True(_actions.EncodeRecords(specJson, recordsJson, out var reencoded, out error), error);
+        Assert.True(_actions.DecodeRecords(
+            specJson, data, textEncoding, recordFormat, out var recordsJson, out error), error);
+        Assert.True(_actions.EncodeRecords(
+            specJson, recordsJson, textEncoding, recordFormat, out var reencoded, out error), error);
 
         Assert.Equal(data, reencoded);
+    }
+
+    // ---- Sample metadata ----
+
+    [Fact]
+    public void TheMainframeSampleReportsSettingsThatAreNotTheDefaults()
+    {
+        // The one sample that isn't ASCII/newline-delimited. If these ever came
+        // back as the defaults, the roundtrip above would be decoding garbage.
+        Assert.True(_actions.GetSampleCopybook(
+            "dtar020-rec", out _, out var data,
+            out var textEncoding, out var recordFormat, out var error), error);
+
+        Assert.Equal("EBCDIC", textEncoding);
+        Assert.Equal("FIXED", recordFormat);
+        Assert.Equal(10233, data.Length); // the real 379 x 27-byte extract
+    }
+
+    [Theory]
+    [MemberData(nameof(SamplesWithData))]
+    public void ReportedSettingsAreAcceptedVerbatimByDecodeRecords(string sampleId)
+    {
+        // The names a sample reports must be names DecodeRecords takes, or the
+        // metadata is decoration. This is the contract that makes an app able
+        // to pass them straight through without mapping.
+        Assert.True(_actions.GetSampleCopybook(
+            sampleId, out var copybook, out var data,
+            out var textEncoding, out var recordFormat, out var error), error);
+        Assert.True(_actions.ParseCopybook(copybook, out var specJson, out _, out error), error);
+
+        Assert.True(_actions.DecodeRecords(
+            specJson, data, textEncoding, recordFormat, out _, out error), error);
+    }
+
+    [Fact]
+    public void ListedSamplesReportTheSameSettingsAsGetSampleCopybook()
+    {
+        // ListSampleIds is what an app builds its dropdown from, so its
+        // settings have to agree with the ones the loader hands back.
+        var listed = JsonDocument.Parse(_actions.ListSampleIds()).RootElement;
+
+        foreach (var sample in listed.EnumerateArray())
+        {
+            var id = sample.GetProperty("id").GetString()!;
+            Assert.True(_actions.GetSampleCopybook(
+                id, out _, out _, out var textEncoding, out var recordFormat, out var error), error);
+
+            Assert.Equal(textEncoding, sample.GetProperty("textEncoding").GetString());
+            Assert.Equal(recordFormat, sample.GetProperty("recordFormat").GetString());
+        }
+    }
+
+    [Fact]
+    public void TheShorthandLoaderRefusesTheSampleItCannotDescribe()
+    {
+        // The four-output overload can't report settings, so for the one sample
+        // that needs non-default ones it fails loudly instead of handing back
+        // EBCDIC bytes that would decode to plausible garbage.
+        Assert.False(_actions.GetSampleCopybook("dtar020-rec", out var copybook, out var data, out var error));
+        Assert.Contains("EBCDIC", error);
+        Assert.Contains("FIXED", error);
+        Assert.Equal("", copybook);
+        Assert.Equal("", data);
+
+        // ...and still works for the ten that do use the defaults.
+        Assert.True(_actions.GetSampleCopybook("portrait-rec", out copybook, out data, out error), error);
+        Assert.NotEqual("", copybook);
+        Assert.NotEqual("", data);
     }
 
     [Fact]
@@ -293,7 +371,8 @@ public class PicassoActionsTests
 
         foreach (var id in ids)
         {
-            Assert.True(_actions.GetSampleCopybook(id, out var copybook, out _, out var error), $"{id}: {error}");
+            Assert.True(_actions.GetSampleCopybook(
+                id, out var copybook, out _, out _, out _, out var error), $"{id}: {error}");
             Assert.NotEmpty(copybook);
             Assert.True(_actions.ParseCopybook(copybook, out _, out _, out error), $"{id}: {error}");
         }
@@ -322,21 +401,18 @@ public class PicassoActionsTests
     }
 
     [Fact]
-    public void EveryBundledSampleShipsWithDataExceptDtar020()
+    public void EveryBundledSampleShipsWithData()
     {
-        // dtar020-rec is the one deliberate exception: its real data file is
-        // EBCDIC with no newline delimiters, which this action surface has no
-        // way to decode correctly yet — see Samples/dtar020/README.md.
+        // dtar020-rec used to be the one exception — its real extract is EBCDIC
+        // with no delimiters, which the surface couldn't decode. It can now, and
+        // the descriptor says how, so the exception is gone.
         var rows = JsonDocument.Parse(_actions.ListSampleIds()).RootElement.EnumerateArray().ToList();
+
+        Assert.Equal(11, rows.Count);
         foreach (var r in rows)
-        {
-            var id = r.GetProperty("id").GetString();
-            var hasSampleData = r.GetProperty("hasSampleData").GetBoolean();
-            if (id == "dtar020-rec")
-                Assert.False(hasSampleData, "dtar020-rec should not report bundled sample data");
-            else
-                Assert.True(hasSampleData, $"{id} reports no sample data");
-        }
+            Assert.True(
+                r.GetProperty("hasSampleData").GetBoolean(),
+                $"{r.GetProperty("id").GetString()} reports no sample data");
     }
 
     [Fact]
@@ -365,7 +441,8 @@ public class PicassoActionsTests
         Assert.Contains(names, n => n.EndsWith("Samples.PORTRAIT-REC.cpy", StringComparison.Ordinal));
         Assert.Contains(names, n => n.EndsWith("Samples.data.PORTRAIT-SAMPLE.DAT", StringComparison.Ordinal));
         Assert.Contains(names, n => n.EndsWith("Samples.dtar020.DTAR020.cpy", StringComparison.Ordinal));
-        Assert.Equal(21, names.Length); // 11 copybooks (DTAR020 has no bundled data) + 10 data files
+        Assert.Contains(names, n => n.EndsWith("Samples.dtar020.DTAR020.bin", StringComparison.Ordinal));
+        Assert.Equal(22, names.Length); // 11 copybooks + 11 data files
         Assert.DoesNotContain(names, n => n.EndsWith("specs.js", StringComparison.Ordinal));
     }
 }

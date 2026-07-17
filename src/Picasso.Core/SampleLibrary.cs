@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using Picasso.Core.Models;
 
 namespace Picasso.Core;
 
@@ -19,6 +20,21 @@ public sealed class SampleDescriptor
     /// should branch on this rather than on an empty string.
     /// </summary>
     public bool HasSampleData { get; set; }
+
+    /// <summary>
+    /// How <see cref="HasSampleData">this sample's data</see> encodes its text
+    /// bytes. Carried on the descriptor because it isn't detectable from the
+    /// bytes: handing a caller EBCDIC data without saying so decodes to
+    /// plausible garbage, which is the failure the DTAR020 sample exists to
+    /// expose. Pass it straight to the codec.
+    /// </summary>
+    public CharacterEncoding TextEncoding { get; set; } = CharacterEncoding.Latin1;
+
+    /// <summary>
+    /// How this sample's data separates records — also not detectable from the
+    /// bytes, for the same reason. Pass it straight to the codec.
+    /// </summary>
+    public RecordFormat RecordFormat { get; set; } = RecordFormat.NewlineDelimited;
 }
 
 /// <summary>
@@ -34,6 +50,14 @@ public static class SampleLibrary
         public string CopybookResource = "";
         public string? DataResource;
         public string Description = "";
+
+        /// <summary>
+        /// How DataResource encodes text and separates records. Defaulted for
+        /// the ten ASCII, newline-delimited samples; stated explicitly for the
+        /// one real mainframe extract, which is neither.
+        /// </summary>
+        public CharacterEncoding TextEncoding = CharacterEncoding.Latin1;
+        public RecordFormat RecordFormat = RecordFormat.NewlineDelimited;
     }
 
     private static readonly List<Sample> Samples = new()
@@ -120,17 +144,18 @@ public static class SampleLibrary
         {
             Id = "dtar020-rec",
             CopybookResource = "Samples.dtar020.DTAR020.cpy",
-            DataResource = null,
+            DataResource = "Samples.dtar020.DTAR020.bin",
+            TextEncoding = CharacterEncoding.Ebcdic037,
+            RecordFormat = RecordFormat.FixedLength,
             Description =
                 "A genuine mainframe copybook (1990, credited 'BRUCE ARTHUR', from a real reporting " +
                 "system) — not written for this project, and bundled in its original fixed-format form: " +
                 "sequence numbers intact, parsed as-is. See Samples/dtar020/README.md for provenance and " +
                 "the limitations it surfaced that no synthetic copybook exposed — fixed-format source, " +
                 "EBCDIC text and undelimited records (all now handled), headless copy members (not). " +
-                "No bundled sample data, though PICASSO can now read the real DTAR020.bin end to end: " +
-                "it needs TextEncoding='EBCDIC' and RecordFormat='FIXED', and SampleDescriptor has no way " +
-                "to say so yet. Serving bytes that decode to garbage under the defaults, unmarked, is the " +
-                "silent wrong answer this sample exists to expose. See Dtar020RealWorldTests.cs.",
+                "Its data is the real 379-record extract, unmodified: EBCDIC cp037 text with no record " +
+                "delimiters, so it is the one sample whose TextEncoding and RecordFormat are not the " +
+                "defaults. Use the ones this descriptor reports and it round-trips byte-for-byte.",
         },
     };
 
@@ -141,17 +166,38 @@ public static class SampleLibrary
             FileName = FileNameOf(s.CopybookResource),
             Description = s.Description,
             HasSampleData = s.DataResource != null,
+            TextEncoding = s.TextEncoding,
+            RecordFormat = s.RecordFormat,
         }).ToList();
 
     /// <summary>
     /// Looks a sample up by id. <paramref name="sampleDataText"/> is empty for a
     /// sample bundled without data — not an error. Every sample currently
     /// bundled has data.
+    ///
+    /// This overload does not report the sample's encoding or record format, so
+    /// it is only safe for samples that use the defaults. Prefer the overload
+    /// that reports them.
     /// </summary>
-    public static bool TryGet(string id, out string copybookSource, out string sampleDataText)
+    public static bool TryGet(string id, out string copybookSource, out string sampleDataText) =>
+        TryGet(id, out copybookSource, out sampleDataText, out _, out _);
+
+    /// <summary>
+    /// Looks a sample up by id, reporting how its data must be decoded. The two
+    /// out settings are not advisory: DTAR020's data is EBCDIC with no record
+    /// delimiters and decodes to garbage under the defaults.
+    /// </summary>
+    public static bool TryGet(
+        string id,
+        out string copybookSource,
+        out string sampleDataText,
+        out CharacterEncoding textEncoding,
+        out RecordFormat recordFormat)
     {
         copybookSource = "";
         sampleDataText = "";
+        textEncoding = CharacterEncoding.Latin1;
+        recordFormat = RecordFormat.NewlineDelimited;
 
         var sample = Samples.FirstOrDefault(
             s => string.Equals(s.Id, id, StringComparison.OrdinalIgnoreCase));
@@ -160,6 +206,8 @@ public static class SampleLibrary
 
         copybookSource = ReadResource(sample.CopybookResource);
         sampleDataText = sample.DataResource is null ? "" : ReadResource(sample.DataResource);
+        textEncoding = sample.TextEncoding;
+        recordFormat = sample.RecordFormat;
         return true;
     }
 

@@ -34,11 +34,11 @@ The proof is [`ParityWithCatalog74Tests`](test/Picasso.Core.Tests/ParityWithCata
 - **Reads both record formats** — newline-delimited, or **undelimited fixed-length** (the mainframe's RECFM=F: a bare concatenation with nothing between records, sliced by the layout's own width). Unlike the source format, this is a caller choice rather than detected — see below.
 - **Previews** the layout as an OutSystems Structure would see it — `PIC 9(n)` → Integer, implied-decimal and COMP-3 → Decimal, `PIC X(n)` → Text.
 
-It ships eleven bundled copybooks (the nine real CATALOG-74 layouts, one synthetic, and one genuine 1990s mainframe copybook), embedded in the assembly.
+It ships eleven bundled copybooks (the nine real CATALOG-74 layouts, one synthetic, and one genuine 1990s mainframe copybook), each with data attached, embedded in the assembly.
 
-None of the data is hand-authored. Seven files are CATALOG-74's own seed data. Two — `AMOUNT-OWED.DAT` and `AMOUNT-PAID.DAT` — are real GnuCOBOL output, captured by compiling CATALOG-74's `CALC-OWED`/`CALC-PAID` and running the batch, which matters because those two layouts have no hand-written `specs.js` counterpart to check against: a real COBOL runtime is the better golden anyway. `PORTRAIT-SAMPLE.DAT` is generated through PICASSO's own encoder rather than typed out, because hand-authoring COMP-3 nibbles is exactly the error-prone transcription this project exists to avoid.
+None of the data is hand-authored. Seven files are CATALOG-74's own seed data. Two — `AMOUNT-OWED.DAT` and `AMOUNT-PAID.DAT` — are real GnuCOBOL output, captured by compiling CATALOG-74's `CALC-OWED`/`CALC-PAID` and running the batch, which matters because those two layouts have no hand-written `specs.js` counterpart to check against: a real COBOL runtime is the better golden anyway. `PORTRAIT-SAMPLE.DAT` is generated through PICASSO's own encoder rather than typed out, because hand-authoring COMP-3 nibbles is exactly the error-prone transcription this project exists to avoid. The eleventh, `DTAR020.bin`, is a real 1990s mainframe extract, unmodified.
 
-The eleventh, [**DTAR020**](src/Picasso.Core/Samples/dtar020/README.md), isn't CATALOG-74's and isn't synthetic — it's a real copybook from an actual reporting system, dated 19/12/90. Running it as-is is what found the fixed-format-source, EBCDIC, undelimited-record, and headless-copy-member gaps. The first three are now handled: the whole 10,233-byte file — fixed-format copybook, EBCDIC text, packed decimals, no delimiters — decodes to typed values and re-encodes to the same bytes it arrived as, through nothing but the public API. It's still not offered as a *selectable* sample, for a reason that's now about honesty rather than capability (see the link).
+The eleventh, [**DTAR020**](src/Picasso.Core/Samples/dtar020/README.md), isn't CATALOG-74's and isn't synthetic — it's a real copybook from an actual reporting system, dated 19/12/90. Running it as-is is what found the fixed-format-source, EBCDIC, undelimited-record, and headless-copy-member gaps. The first three are now handled: the whole 10,233-byte file — fixed-format copybook, EBCDIC text, packed decimals, no delimiters — decodes to typed values and re-encodes to the same bytes it arrived as, through nothing but the public API. It's bundled as a selectable sample, and it's the only one whose data needs anything other than the default settings — `GetSampleCopybook` reports the `EBCDIC` and `FIXED` it requires, because neither is detectable from the bytes.
 
 ## The one deliberate discrepancy
 
@@ -79,7 +79,8 @@ src/
     FlatFileCodec.cs         Fixed-width text <-> records
     OutSystemsPreview.cs     Flat layout -> OutSystems attribute rows
     SampleLibrary.cs         The bundled copybooks, embedded in the assembly
-    Samples/                 9 real CATALOG-74 copybooks + seed data, 1 synthetic
+    Samples/                 9 real CATALOG-74 copybooks + seed data, 1 synthetic,
+                             1 real mainframe copybook + its real extract
   Picasso.Extension/       The Integration Studio action surface
     PicassoActions.cs
     README-IntegrationStudio.md
