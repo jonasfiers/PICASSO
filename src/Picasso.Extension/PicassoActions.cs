@@ -112,6 +112,22 @@ public sealed class PicassoActions
         string fixedWidthText,
         string textEncoding,
         out string recordsJson,
+        out string errorMessage) =>
+        DecodeRecords(flatSpecJson, fixedWidthText, textEncoding, "", out recordsJson, out errorMessage);
+
+    /// <summary>
+    /// Decodes fixed-width text into records. <paramref name="recordFormat"/>
+    /// says how records are separated: "" or "DELIMITED" for newline-separated
+    /// records, "FIXED" for a bare concatenation of fixed-length records with
+    /// no delimiters at all — the mainframe's usual RECFM=F shape. The record
+    /// width always comes from the layout, never from this.
+    /// </summary>
+    public bool DecodeRecords(
+        string flatSpecJson,
+        string fixedWidthText,
+        string textEncoding,
+        string recordFormat,
+        out string recordsJson,
         out string errorMessage)
     {
         recordsJson = "";
@@ -120,7 +136,8 @@ public sealed class PicassoActions
         try
         {
             var spec = ReadSpec(flatSpecJson);
-            var records = FlatFileCodec.Decode(spec, fixedWidthText ?? "", ParseEncoding(textEncoding));
+            var records = FlatFileCodec.Decode(
+                spec, fixedWidthText ?? "", ParseEncoding(textEncoding), ParseRecordFormat(recordFormat));
 
             var payload = records
                 .Select(r => r.ToDictionary(kv => kv.Key, kv => kv.Value))
@@ -159,6 +176,21 @@ public sealed class PicassoActions
         string recordsJson,
         string textEncoding,
         out string fixedWidthText,
+        out string errorMessage) =>
+        EncodeRecords(flatSpecJson, recordsJson, textEncoding, "", out fixedWidthText, out errorMessage);
+
+    /// <summary>
+    /// Encodes records back to fixed-width text. <paramref name="textEncoding"/>
+    /// and <paramref name="recordFormat"/> take the same names as
+    /// <see cref="DecodeRecords(string,string,string,string,out string,out string)"/>;
+    /// "FIXED" writes the records back to back with no delimiters.
+    /// </summary>
+    public bool EncodeRecords(
+        string flatSpecJson,
+        string recordsJson,
+        string textEncoding,
+        string recordFormat,
+        out string fixedWidthText,
         out string errorMessage)
     {
         fixedWidthText = "";
@@ -168,13 +200,39 @@ public sealed class PicassoActions
         {
             var spec = ReadSpec(flatSpecJson);
             var records = ReadRecords(recordsJson, spec);
-            fixedWidthText = FlatFileCodec.Encode(spec, records, ParseEncoding(textEncoding));
+            fixedWidthText = FlatFileCodec.Encode(
+                spec, records, ParseEncoding(textEncoding), ParseRecordFormat(recordFormat));
             return true;
         }
         catch (Exception ex)
         {
             errorMessage = ex.Message;
             return false;
+        }
+    }
+
+    /// <summary>
+    /// Maps the action surface's record-format name onto <see cref="RecordFormat"/>.
+    /// Unknown names throw, for the same reason as <see cref="ParseEncoding"/>:
+    /// this boundary turns that into a named failure rather than a guess.
+    /// </summary>
+    private static RecordFormat ParseRecordFormat(string name)
+    {
+        switch ((name ?? "").Trim().ToUpperInvariant())
+        {
+            case "":
+            case "DELIMITED":
+            case "NEWLINE":
+                return RecordFormat.NewlineDelimited;
+
+            case "FIXED":
+            case "FIXEDLENGTH":
+                return RecordFormat.FixedLength;
+
+            default:
+                throw new ArgumentException(
+                    $"Unknown record format '{name}'. Use '' or 'DELIMITED' for newline-separated " +
+                    "records, or 'FIXED' for an undelimited fixed-length file.");
         }
     }
 

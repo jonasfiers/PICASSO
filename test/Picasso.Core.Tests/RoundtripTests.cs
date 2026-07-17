@@ -293,3 +293,77 @@ public class EbcdicCodecTests
         Assert.Equal("ÁÂÃ@@@", decoded["NAME"]);
     }
 }
+
+/// <summary>
+/// Undelimited fixed-length records (the mainframe's RECFM=F shape): the file
+/// is a bare concatenation and the layout's own record length is the only
+/// thing that says where one record stops.
+/// </summary>
+public class FixedLengthRecordTests
+{
+    private static IReadOnlyList<FieldSpec> Spec() =>
+        CopybookParser.Parse("01  R.\n    05  NAME PIC X(6).\n    05  COUNT PIC 9(3).\n").Flat;
+
+    private static Dictionary<string, object> Rec(string name, decimal count) =>
+        new() { ["NAME"] = name, ["COUNT"] = count };
+
+    [Fact]
+    public void RoundtripsWithNoDelimitersAtAll()
+    {
+        var spec = Spec();
+        var records = new[] { Rec("AAA", 1m), Rec("BBB", 2m), Rec("CCC", 3m) };
+
+        var encoded = FlatFileCodec.Encode(spec, records, format: RecordFormat.FixedLength);
+
+        Assert.Equal("AAA   001BBB   002CCC   003", encoded);
+        Assert.DoesNotContain('\n', encoded); // no trailing newline either
+
+        var decoded = FlatFileCodec.Decode(
+            spec, encoded, CharacterEncoding.Latin1, RecordFormat.FixedLength);
+
+        Assert.Equal(3, decoded.Count);
+        Assert.Equal("BBB", decoded[1]["NAME"]);
+        Assert.Equal(2m, decoded[1]["COUNT"]);
+    }
+
+    /// <summary>
+    /// The reason the two formats can't be collapsed into one: with no
+    /// delimiters, 0x0A is just a byte. The newline splitter would tear this
+    /// record in half; the fixed-length splitter carries it through.
+    /// </summary>
+    [Fact]
+    public void ANewlineInsideAFieldIsDataNotAStructure()
+    {
+        var spec = Spec();
+        var encoded = FlatFileCodec.Encode(
+            spec, new[] { Rec("A\nB", 7m) }, format: RecordFormat.FixedLength);
+
+        var decoded = Assert.Single(FlatFileCodec.Decode(
+            spec, encoded, CharacterEncoding.Latin1, RecordFormat.FixedLength));
+        Assert.Equal("A\nB", decoded["NAME"]);
+
+        // Read as delimited, the same bytes tear into two malformed records.
+        Assert.Throws<FormatException>(() => FlatFileCodec.Decode(spec, encoded));
+    }
+
+    [Fact]
+    public void ALengthThatIsNotAWholeNumberOfRecordsFailsLoudly()
+    {
+        var spec = Spec(); // 9 bytes per record
+
+        var ex = Assert.Throws<FormatException>(() => FlatFileCodec.Decode(
+            spec, new string('X', 20), CharacterEncoding.Latin1, RecordFormat.FixedLength));
+
+        Assert.Contains("20 bytes", ex.Message);
+        Assert.Contains("2 records plus 2 bytes left over", ex.Message);
+    }
+
+    [Fact]
+    public void AnEmptyFileIsZeroRecordsNotAnError()
+    {
+        var spec = Spec();
+        Assert.Empty(FlatFileCodec.Decode(spec, "", CharacterEncoding.Latin1, RecordFormat.FixedLength));
+        Assert.Equal("", FlatFileCodec.Encode(
+            spec, new List<Dictionary<string, object>>(), format: RecordFormat.FixedLength));
+    }
+}

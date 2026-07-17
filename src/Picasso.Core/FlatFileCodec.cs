@@ -32,11 +32,12 @@ public static class FlatFileCodec
     public static List<Dictionary<string, object>> Decode(
         IReadOnlyList<FieldSpec> spec,
         string text,
-        CharacterEncoding encoding = CharacterEncoding.Latin1)
+        CharacterEncoding encoding = CharacterEncoding.Latin1,
+        RecordFormat format = RecordFormat.NewlineDelimited)
     {
         var records = new List<Dictionary<string, object>>();
         var expectedLength = spec.Sum(f => f.Len);
-        foreach (var line in SplitLines(text))
+        foreach (var line in SplitRecords(text, expectedLength, format))
         {
             if (line.Length != expectedLength)
                 throw new FormatException(
@@ -53,7 +54,8 @@ public static class FlatFileCodec
     public static string Encode(
         IReadOnlyList<FieldSpec> spec,
         IEnumerable<Dictionary<string, object>> records,
-        CharacterEncoding encoding = CharacterEncoding.Latin1)
+        CharacterEncoding encoding = CharacterEncoding.Latin1,
+        RecordFormat format = RecordFormat.NewlineDelimited)
     {
         var lines = new List<string>();
         foreach (var record in records)
@@ -67,6 +69,10 @@ public static class FlatFileCodec
             }
             lines.Add(sb.ToString());
         }
+
+        if (format == RecordFormat.FixedLength)
+            return string.Concat(lines);
+
         return lines.Count == 0 ? "" : string.Join("\n", lines) + "\n";
     }
 
@@ -78,9 +84,39 @@ public static class FlatFileCodec
     private static string EncodeText(string text, CharacterEncoding encoding) =>
         encoding == CharacterEncoding.Ebcdic037 ? Ebcdic.Encode(text) : text;
 
-    private static IEnumerable<string> SplitLines(string text)
+    private static IEnumerable<string> SplitRecords(string text, int recordLength, RecordFormat format)
     {
-        return text.Replace("\r\n", "\n").Split('\n').Where(line => line.Length > 0);
+        if (format == RecordFormat.NewlineDelimited)
+            return text.Replace("\r\n", "\n").Split('\n').Where(line => line.Length > 0);
+
+        return SplitFixedLength(text, recordLength);
+    }
+
+    /// <summary>
+    /// Slices a bare concatenation of fixed-length records.
+    ///
+    /// Deliberately does no newline normalization and drops no "empty" chunks:
+    /// in an undelimited file 0x0D and 0x0A are data, not structure. That is
+    /// not hypothetical — the real DTAR020.bin carries 21 0x0D bytes inside
+    /// COMP-3 fields (0x0D is the digit 0 with a negative sign nibble), so the
+    /// delimited path's Replace("\r\n", "\n") would silently eat a byte and
+    /// shift every record after it, were one ever followed by an 0x0A.
+    /// </summary>
+    private static List<string> SplitFixedLength(string text, int recordLength)
+    {
+        if (recordLength <= 0)
+            throw new FormatException("Layout has no bytes; cannot split a file by record length.");
+
+        if (text.Length % recordLength != 0)
+            throw new FormatException(
+                $"File is {text.Length} bytes, which is not a whole number of {recordLength}-byte records " +
+                $"({text.Length / recordLength} records plus {text.Length % recordLength} bytes left over). " +
+                "Either the layout doesn't match this file, or its records are delimited rather than fixed-length.");
+
+        var records = new List<string>(text.Length / recordLength);
+        for (var offset = 0; offset < text.Length; offset += recordLength)
+            records.Add(text.Substring(offset, recordLength));
+        return records;
     }
 
     private static object DecodeField(string raw, FieldSpec field, CharacterEncoding encoding)

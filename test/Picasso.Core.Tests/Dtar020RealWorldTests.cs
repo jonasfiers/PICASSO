@@ -161,6 +161,61 @@ public class Dtar020RealWorldTests
     }
 
     /// <summary>
+    /// The whole real file, start to finish, through nothing but the public
+    /// API: a genuine 1990s mainframe extract — fixed-format copybook, EBCDIC
+    /// text, packed decimals, no record delimiters — decoded to typed values
+    /// and re-encoded to the same 10,233 bytes it arrived as.
+    /// </summary>
+    [Fact]
+    public void RoundtripsTheEntireRealFile_ByteForByte()
+    {
+        var parsed = ParseDtar020();
+        var rawBytes = File.ReadAllBytes(SamplePaths.Root("dtar020/DTAR020.bin"));
+        var text = new string(rawBytes.Select(b => (char)b).ToArray());
+
+        var records = FlatFileCodec.Decode(
+            parsed.Flat, text, CharacterEncoding.Ebcdic037, RecordFormat.FixedLength);
+        Assert.Equal(379, records.Count);
+
+        var reencoded = FlatFileCodec.Encode(
+            parsed.Flat, records, CharacterEncoding.Ebcdic037, RecordFormat.FixedLength);
+
+        Assert.Equal(rawBytes, reencoded.Select(c => (byte)c).ToArray());
+    }
+
+    /// <summary>
+    /// Why the fixed-length path must not normalize newlines: this file has
+    /// 0x0D bytes inside its COMP-3 fields (0x0D is the digit 0 with a
+    /// negative sign nibble). They're data. A \r\n normalization pass over an
+    /// undelimited file would eat one and shift every record after it.
+    /// </summary>
+    [Fact]
+    public void CarriesControlCodeBytesInsidePackedFields()
+    {
+        var rawBytes = File.ReadAllBytes(SamplePaths.Root("dtar020/DTAR020.bin"));
+
+        Assert.Equal(21, rawBytes.Count(b => b == 0x0D));
+        Assert.Equal(0, rawBytes.Count(b => b == 0x0A));
+    }
+
+    /// <summary>
+    /// The old behaviour, pinned: the delimited splitter hands the layout the
+    /// entire 10,233-byte file as one oversized record. It fails loudly rather
+    /// than wrongly — but it fails, which is why the format is a caller choice.
+    /// </summary>
+    [Fact]
+    public void TheNewlineSplitterCannotReadThisFile()
+    {
+        var parsed = ParseDtar020();
+        var rawBytes = File.ReadAllBytes(SamplePaths.Root("dtar020/DTAR020.bin"));
+        var text = new string(rawBytes.Select(b => (char)b).ToArray());
+
+        var ex = Assert.Throws<FormatException>(
+            () => FlatFileCodec.Decode(parsed.Flat, text, CharacterEncoding.Ebcdic037));
+        Assert.Contains("10233", ex.Message);
+    }
+
+    /// <summary>
     /// The strongest check available here: re-encoding the published values
     /// must reproduce a genuine mainframe record byte for byte. Nothing in
     /// this assertion comes from PICASSO — the input values are CobolToJson's

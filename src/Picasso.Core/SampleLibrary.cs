@@ -125,11 +125,12 @@ public static class SampleLibrary
                 "A genuine mainframe copybook (1990, credited 'BRUCE ARTHUR', from a real reporting " +
                 "system) — not written for this project, and bundled in its original fixed-format form: " +
                 "sequence numbers intact, parsed as-is. See Samples/dtar020/README.md for provenance and " +
-                "the limitations it surfaced that no synthetic copybook exposed — fixed-format source and " +
-                "EBCDIC text (both now handled), headless copy members and undelimited record files (not). " +
-                "No bundled sample data: the real DTAR020.bin has no delimiters between records, so this " +
-                "action surface can't split it into records yet — its EBCDIC text now decodes correctly " +
-                "via TextEncoding='EBCDIC'. See Dtar020RealWorldTests.cs for how it's actually decoded.",
+                "the limitations it surfaced that no synthetic copybook exposed — fixed-format source, " +
+                "EBCDIC text and undelimited records (all now handled), headless copy members (not). " +
+                "No bundled sample data, though PICASSO can now read the real DTAR020.bin end to end: " +
+                "it needs TextEncoding='EBCDIC' and RecordFormat='FIXED', and SampleDescriptor has no way " +
+                "to say so yet. Serving bytes that decode to garbage under the defaults, unmarked, is the " +
+                "silent wrong answer this sample exists to expose. See Dtar020RealWorldTests.cs.",
         },
     };
 

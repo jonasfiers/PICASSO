@@ -168,6 +168,42 @@ public class PicassoActionsTests
         Assert.False(_actions.EncodeRecords(specJson, "[]", "EBCDIK", out _, out error));
     }
 
+    // ---- Record format ----
+
+    [Fact]
+    public void UndelimitedFixedLengthFileSurvivesTheFullActionRoundtrip()
+    {
+        Assert.True(_actions.GetSampleCopybook("portrait-rec", out var copybook, out var data, out var error), error);
+        Assert.True(_actions.ParseCopybook(copybook, out var specJson, out _, out error), error);
+        Assert.True(_actions.DecodeRecords(specJson, data, out var recordsJson, out error), error);
+
+        // Re-encode with no delimiters, then read it back the same way.
+        Assert.True(_actions.EncodeRecords(specJson, recordsJson, "", "FIXED", out var packed, out error), error);
+        Assert.DoesNotContain("\n", packed);
+        Assert.True(_actions.DecodeRecords(specJson, packed, "", "FIXED", out var back, out error), error);
+        Assert.Equal(recordsJson, back);
+    }
+
+    [Fact]
+    public void AnUnknownRecordFormatFailsLoudlyRatherThanDefaulting()
+    {
+        Assert.True(_actions.GetSampleCopybook("portrait-rec", out var copybook, out var data, out var error), error);
+        Assert.True(_actions.ParseCopybook(copybook, out var specJson, out _, out error), error);
+
+        Assert.False(_actions.DecodeRecords(specJson, data, "", "BLOCKED", out _, out error));
+        Assert.Contains("BLOCKED", error);
+    }
+
+    [Fact]
+    public void AFileThatIsNotAWholeNumberOfRecordsReportsHowManyBytesAreLeftOver()
+    {
+        Assert.True(_actions.GetSampleCopybook("portrait-rec", out var copybook, out _, out var error), error);
+        Assert.True(_actions.ParseCopybook(copybook, out var specJson, out _, out error), error);
+
+        Assert.False(_actions.DecodeRecords(specJson, "junk", "", "FIXED", out _, out error));
+        Assert.Contains("left over", error);
+    }
+
     // ---- Failure modes come back as errorMessage, never as exceptions ----
 
     [Fact]

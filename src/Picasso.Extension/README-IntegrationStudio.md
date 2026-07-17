@@ -59,11 +59,14 @@ All parameters are **Text** unless noted.
 | `FlatSpecJson` | Input | Text |
 | `FixedWidthText` | Input | Text |
 | `TextEncoding` | Input | Text |
+| `RecordFormat` | Input | Text |
 | `Success` | Output | Boolean |
 | `RecordsJson` | Output | Text |
 | `ErrorMessage` | Output | Text |
 
-`TextEncoding` names the encoding of the file's **text** bytes: leave it blank (or `LATIN1`/`ASCII`) for ordinary ASCII data, or pass `EBCDIC` for a cp037 mainframe extract. COMP-3 fields are never affected by it. An unrecognized name comes back as `Success = False` rather than quietly defaulting to ASCII. If you'd rather not wire the parameter at all, there's a four-input overload without it that behaves exactly as blank does.
+`RecordFormat` says how records are separated: blank (or `DELIMITED`) for newline-separated records, or `FIXED` for a bare concatenation of fixed-length records with no delimiters — the mainframe's usual RECFM=F shape. The record *width* always comes from the layout; this only says whether anything sits between one record and the next. Like `TextEncoding`, an unrecognized name comes back as `Success = False`, and it is never auto-detected: a delimited file's length can divide evenly by the record length too, so a guess could silently return misaligned records.
+
+`TextEncoding` names the encoding of the file's **text** bytes: leave it blank (or `LATIN1`/`ASCII`) for ordinary ASCII data, or pass `EBCDIC` for a cp037 mainframe extract. COMP-3 fields are never affected by it. An unrecognized name comes back as `Success = False` rather than quietly defaulting to ASCII. If you'd rather not wire these, there are shorter overloads without them that behave exactly as blank does.
 
 ### `EncodeRecords`
 
@@ -72,11 +75,12 @@ All parameters are **Text** unless noted.
 | `FlatSpecJson` | Input | Text |
 | `RecordsJson` | Input | Text |
 | `TextEncoding` | Input | Text |
+| `RecordFormat` | Input | Text |
 | `Success` | Output | Boolean |
 | `FixedWidthText` | Output | Text |
 | `ErrorMessage` | Output | Text |
 
-`TextEncoding` takes the same names as `DecodeRecords`, and writes the text bytes in that encoding.
+`TextEncoding` and `RecordFormat` take the same names as `DecodeRecords`: the text bytes are written in that encoding, and `FIXED` writes the records back to back with no delimiters.
 
 ### `GetSampleCopybook`
 
@@ -133,17 +137,17 @@ public void MssParseCopybook(string ssCopybookSource, out bool ssSuccess,
         out ssFlatSpecJson, out ssStructurePreviewJson, out ssErrorMessage);
 }
 
-public void MssDecodeRecords(string ssFlatSpecJson, string ssFixedWidthText, string ssTextEncoding,
+public void MssDecodeRecords(string ssFlatSpecJson, string ssFixedWidthText, string ssTextEncoding, string ssRecordFormat,
     out bool ssSuccess, out string ssRecordsJson, out string ssErrorMessage)
 {
-    ssSuccess = _picasso.DecodeRecords(ssFlatSpecJson, ssFixedWidthText, ssTextEncoding,
+    ssSuccess = _picasso.DecodeRecords(ssFlatSpecJson, ssFixedWidthText, ssTextEncoding, ssRecordFormat,
         out ssRecordsJson, out ssErrorMessage);
 }
 
-public void MssEncodeRecords(string ssFlatSpecJson, string ssRecordsJson, string ssTextEncoding,
+public void MssEncodeRecords(string ssFlatSpecJson, string ssRecordsJson, string ssTextEncoding, string ssRecordFormat,
     out bool ssSuccess, out string ssFixedWidthText, out string ssErrorMessage)
 {
-    ssSuccess = _picasso.EncodeRecords(ssFlatSpecJson, ssRecordsJson, ssTextEncoding,
+    ssSuccess = _picasso.EncodeRecords(ssFlatSpecJson, ssRecordsJson, ssTextEncoding, ssRecordFormat,
         out ssFixedWidthText, out ssErrorMessage);
 }
 
