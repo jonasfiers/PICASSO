@@ -203,34 +203,39 @@ public class OccursTests
     // ---- Rejections: the harder shapes stay out, distinctly ----
 
     [Fact]
-    public void DependingOnIsRejectedAsADistinctNamedCaseNotAFixedCount()
+    public void DependingOnIsNowRecognizedAsAVariableLengthTableNotAFixedCount()
     {
-        // The regression that proves the easier case didn't let ODO through:
-        // "OCCURS m TO n TIMES DEPENDING ON f" must not be treated as a fixed
-        // count of m or n. Its message names DEPENDING ON specifically and is
-        // NOT the generic "OCCURS is not supported" text the old code used.
-        var ex = Assert.Throws<FormatException>(() => CopybookParser.Parse(@"
+        // "OCCURS m TO n TIMES DEPENDING ON f" is the single, common ODO case,
+        // now supported. It must be recognized as variable-length — never
+        // silently expanded as a fixed count of m or n — and its bounds and
+        // depending field captured. Full round-trip behaviour lives in OdoTests.
+        var parsed = CopybookParser.Parse(@"
             01  R.
                 05  N            PIC 9(2).
                 05  ENTRY OCCURS 1 TO 10 TIMES DEPENDING ON N.
                     10  ENTRY-VAL PIC X(4).
-        "));
+        ");
 
-        Assert.Contains("DEPENDING ON", ex.Message);
-        Assert.Contains("ENTRY", ex.Message);
-        // Distinct from the fixed-count path: the bounds are never mistaken for a
-        // count, so no field named ENTRY(1)/ENTRY(10) exists.
-        Assert.DoesNotContain("Nested OCCURS", ex.Message);
+        Assert.True(parsed.IsVariableLength);
+        Assert.NotNull(parsed.Odo);
+        Assert.Equal("ENTRY", parsed.Odo!.TableName);
+        Assert.Equal("N", parsed.Odo.DependsOn);
+        Assert.Equal(1, parsed.Odo.Min);
+        Assert.Equal(10, parsed.Odo.Max);
     }
 
     [Fact]
-    public void DependingOnWithoutAnUpperBoundIsAlsoRejected()
+    public void DependingOnWithoutAnUpperBoundGetsAnImpliedMinimumOfOne()
     {
-        // Some dialects allow "OCCURS n TIMES DEPENDING ON f" with no TO. The
-        // DEPENDING keyword alone still marks the variable form.
-        var ex = Assert.Throws<FormatException>(() => CopybookParser.Parse(
-            "01  R.\n    05  N PIC 9(2).\n    05  E PIC X(3) OCCURS 9 TIMES DEPENDING ON N.\n"));
-        Assert.Contains("DEPENDING ON", ex.Message);
+        // "OCCURS n TIMES DEPENDING ON f" with no TO: n is the maximum, and the
+        // minimum is implied to be 1 (COBOL leaves it unstated in this form).
+        var parsed = CopybookParser.Parse(
+            "01  R.\n    05  N PIC 9(2).\n    05  E PIC X(3) OCCURS 9 TIMES DEPENDING ON N.\n");
+
+        Assert.True(parsed.IsVariableLength);
+        Assert.Equal(1, parsed.Odo!.Min);
+        Assert.Equal(9, parsed.Odo.Max);
+        Assert.Equal("N", parsed.Odo.DependsOn);
     }
 
     [Fact]

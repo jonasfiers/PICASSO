@@ -34,21 +34,109 @@ public sealed class CopybookNode
     /// </summary>
     public int OccursCount { get; set; } = 1;
 
+    /// <summary>
+    /// True for the single OCCURS ... DEPENDING ON table in a variable-length
+    /// (ODO) copybook. Set by CopybookParser.ParseStatement. Unlike a fixed
+    /// OCCURS, the repeat count is NOT known at parse time — it is read per
+    /// record, at decode time, out of the field named <see cref="OdoDependsOn"/>.
+    /// <see cref="OccursCount"/> is therefore not the authoritative count for an
+    /// ODO table; it is set transiently to a concrete count while a concrete
+    /// layout is built (see CopybookParser.BuildConcreteLayout). Only one node in
+    /// a tree may carry this flag — more than one is rejected loudly at parse.
+    /// </summary>
+    public bool IsOdoTable { get; set; }
+
+    /// <summary>Lower bound of an ODO table's occurrence count (the "m" in OCCURS m TO n).</summary>
+    public int OdoMin { get; set; }
+
+    /// <summary>Upper bound of an ODO table's occurrence count (the "n" in OCCURS m TO n).</summary>
+    public int OdoMax { get; set; }
+
+    /// <summary>
+    /// The name of the field whose runtime value gives an ODO table its actual
+    /// occurrence count. Null unless <see cref="IsOdoTable"/>. Must be defined
+    /// earlier in the record than the table itself (validated at parse).
+    /// </summary>
+    public string? OdoDependsOn { get; set; }
+
     /// <summary>Populated by CopybookParser.ComputeOffsets.</summary>
     public int Start { get; set; }
     public int Len { get; set; }
 }
 
+/// <summary>
+/// The descriptor for a variable-length (OCCURS ... DEPENDING ON) copybook —
+/// the one thing a static flat layout cannot express. Present on
+/// <see cref="ParsedCopybook.Odo"/> exactly when the copybook has an ODO table.
+///
+/// PICASSO supports the single, common case: EXACTLY ONE OCCURS m TO n
+/// DEPENDING ON dep per record, dep defined before the table so its value is
+/// readable before the variable section begins. Everything harder (two ODO
+/// tables, nested ODO, an ODO combined with an OCCURS that can't be cleanly
+/// modelled, or a dep that comes after the table) is rejected loudly at parse.
+///
+/// The concrete byte layout is not fixed: it is built per record, once the
+/// actual count is read from <see cref="DependingField"/>, by
+/// CopybookParser.BuildConcreteLayout(count).
+/// </summary>
+public sealed class OdoInfo
+{
+    public OdoInfo(string tableName, string dependsOn, int min, int max, FieldSpec dependingField)
+    {
+        TableName = tableName;
+        DependsOn = dependsOn;
+        Min = min;
+        Max = max;
+        DependingField = dependingField;
+    }
+
+    /// <summary>The ODO table's own name (e.g. TAB) — the prefix its expanded leaf names carry, TAB(1)…TAB(count).</summary>
+    public string TableName { get; }
+
+    /// <summary>The name of the field whose value sets the occurrence count.</summary>
+    public string DependsOn { get; }
+
+    /// <summary>Inclusive lower bound on the occurrence count.</summary>
+    public int Min { get; }
+
+    /// <summary>Inclusive upper bound on the occurrence count.</summary>
+    public int Max { get; }
+
+    /// <summary>
+    /// The depending field's flat spec, at its fixed offset in the record's
+    /// prefix (identical in every concrete layout, since it precedes the table).
+    /// The codec reads it to learn each record's occurrence count before it can
+    /// build that record's concrete layout.
+    /// </summary>
+    public FieldSpec DependingField { get; }
+}
+
 public sealed class ParsedCopybook
 {
-    public ParsedCopybook(CopybookNode root, IReadOnlyList<FieldSpec> flat, bool rootIsSynthetic = false)
+    public ParsedCopybook(
+        CopybookNode root,
+        IReadOnlyList<FieldSpec> flat,
+        bool rootIsSynthetic = false,
+        OdoInfo? odo = null)
     {
         Root = root;
         Flat = flat;
         RootIsSynthetic = rootIsSynthetic;
+        Odo = odo;
     }
 
     public CopybookNode Root { get; }
+
+    /// <summary>
+    /// The flat leaf layout. For a fixed (non-ODO) copybook this is THE
+    /// authoritative layout. For a variable-length (ODO) copybook it is a
+    /// representative snapshot at the minimum occurrence count only — NOT
+    /// authoritative for decoding, because a record's real layout depends on the
+    /// per-record count. Decode/encode an ODO copybook through the
+    /// <see cref="FlatFileCodec"/> overloads that take a ParsedCopybook (they
+    /// build the concrete layout per record), never straight off this list. Check
+    /// <see cref="IsVariableLength"/> first.
+    /// </summary>
     public IReadOnlyList<FieldSpec> Flat { get; }
 
     /// <summary>
@@ -60,4 +148,13 @@ public sealed class ParsedCopybook
     /// offset or length is affected either way.
     /// </summary>
     public bool RootIsSynthetic { get; }
+
+    /// <summary>
+    /// The variable-length (OCCURS ... DEPENDING ON) descriptor, or null for an
+    /// ordinary fixed-layout copybook. See <see cref="OdoInfo"/>.
+    /// </summary>
+    public OdoInfo? Odo { get; }
+
+    /// <summary>True when this copybook's record length is data-dependent (ODO).</summary>
+    public bool IsVariableLength => Odo != null;
 }
