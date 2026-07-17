@@ -62,8 +62,8 @@ PICASSO models it the way COBOL defines it: **one** `NET-BALANCE` field spanning
 
 ## Not supported (v1)
 
-- **`OCCURS`** — repeating groups. A flat `{Start, Len}` list can't express "this 20-byte block, 12 times"; it needs either indexed field names or a nested result shape.
-- **`REDEFINES`** — two names for the same bytes. Which is thematically ironic for a project named after a Cubist, and duly noted.
+- **`OCCURS`** — repeating groups. A flat `{Start, Len}` list can't express "this 20-byte block, 12 times"; it needs either indexed field names or a nested result shape. Rejected with a named error rather than silently ignored — an earlier version skipped the repeat count the way it skips `VALUE`/`JUSTIFIED`, so a 5×10-byte repeating field parsed as a single 10-byte one and every offset after it was silently wrong.
+- **`REDEFINES`** — two names for the same bytes. Which is thematically ironic for a project named after a Cubist, and duly noted. Also rejected explicitly now, for the same reason as `OCCURS`: skipping it used to place the redefining field at the next free offset instead of overlapping the field it redefines, corrupting every offset after it.
 - **Overpunched signs** — `PIC S9(5)` without an explicit `SIGN IS ... SEPARATE` clause is rejected rather than guessed at. Failing loudly beats mis-sizing a field by one byte and corrupting everything downstream of it.
 - **EBCDIC variants other than cp037** — cp037 (US/Canada) is supported and is the variant DTAR020 uses. cp273 (German), cp500 (International), cp1047 and the rest of the family disagree on punctuation placement, and there's no real file here to verify them against, so they're not guessed at.
 

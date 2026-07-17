@@ -191,6 +191,19 @@ public static class CopybookParser
                     }
                     break;
 
+                case "OCCURS":
+                    throw new FormatException(
+                        $"OCCURS is not supported: field '{name}' repeats, which a flat {{Start, Len}} " +
+                        "list can't express — it needs either indexed field names or a nested result " +
+                        "shape. See README's 'Not supported (v1)' section.");
+
+                case "REDEFINES":
+                    throw new FormatException(
+                        $"REDEFINES is not supported: field '{name}' would redefine another field's " +
+                        "bytes, which this parser does not model — every field is assumed to occupy its " +
+                        "own bytes, never bytes another field also claims. See README's " +
+                        "'Not supported (v1)' section.");
+
                 default:
                     // Unrecognized clause (e.g. VALUE, JUSTIFIED) — skip
                     // one token at a time; out of scope for v1.

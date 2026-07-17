@@ -417,6 +417,31 @@ public class CopybookParserTests
         Assert.Throws<FormatException>(() => CopybookParser.Parse("      *> only a comment\n"));
     }
 
+    [Fact]
+    public void RejectsOccurs()
+    {
+        // Previously silently ignored: OCCURS's repeat count was skipped like
+        // an unrecognized clause, so a 5x10-byte repeating field parsed as a
+        // single 10-byte field and every offset after it was wrong -- with no
+        // error. This is the regression test for that.
+        var ex = Assert.Throws<FormatException>(() => CopybookParser.Parse(
+            "01  R.\n    05  REPEATED PIC X(10) OCCURS 5 TIMES.\n    05  NEXT PIC X(5).\n"));
+        Assert.Contains("OCCURS", ex.Message);
+        Assert.Contains("REPEATED", ex.Message);
+    }
+
+    [Fact]
+    public void RejectsRedefines()
+    {
+        // Previously silently ignored the same way: REDEFINES was skipped, so
+        // the redefining field was placed at the next free offset instead of
+        // overlapping the field it redefines, corrupting every offset after it.
+        var ex = Assert.Throws<FormatException>(() => CopybookParser.Parse(
+            "01  R.\n    05  ORIGINAL PIC X(10).\n    05  ALIASED REDEFINES ORIGINAL PIC 9(10).\n"));
+        Assert.Contains("REDEFINES", ex.Message);
+        Assert.Contains("ALIASED", ex.Message);
+    }
+
     // ---- Corpus smoke test ----
 
     [Theory]
