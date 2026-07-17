@@ -346,6 +346,17 @@ public static class CopybookParser
                 // on the mainframe extracts PICASSO decodes that is big-endian too,
                 // so it routes through the same path — consistent with the
                 // big-endian-only assumption EBCDIC and COMP-3 already make.
+                //
+                // COMP-5 SIZING is deliberately the IBM Enterprise COBOL rule —
+                // 2/4/8 bytes by digit count, identical to COMP-4 storage, widening
+                // only the value range, not the byte width. That diverges from
+                // Micro Focus / GnuCOBOL "native" COMP-5, which is byte-granular
+                // (a 1-2 digit COMP-5 is 1 byte there). A differential run against
+                // GnuCOBOL (2026-07-17) surfaced exactly this 1-byte gap on a handful
+                // of COMP-5 test copybooks; PICASSO keeps the IBM sizing because its
+                // whole target is IBM-mainframe data (EBCDIC cp037, COMP-3, big-endian).
+                // A non-mainframe (MF/native) source with byte-granular COMP-5 would
+                // be mis-sized — a documented dialect assumption, not a bug.
                 case "COMP":
                 case "COMPUTATIONAL":
                 case "COMP-4":
