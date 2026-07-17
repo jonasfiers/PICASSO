@@ -34,6 +34,18 @@ public sealed class CopybookNode
     /// </summary>
     public int OccursCount { get; set; } = 1;
 
+    /// <summary>
+    /// The name of the prior sibling this item REDEFINES, or null for an ordinary
+    /// item. When set, this node (and its whole subtree) is laid out starting at
+    /// the target sibling's byte offset rather than at the running offset — an
+    /// overlay, sharing the target's bytes. Set by CopybookParser.ParseStatement;
+    /// resolved and applied by ComputeOffsets, which fails loudly if the named
+    /// target is not a prior same-level sibling. A REDEFINES adds no new storage:
+    /// the next ordinary sibling continues from where it would have without it
+    /// (unless the redefinition is longer than its target, which extends the group).
+    /// </summary>
+    public string? RedefinesTarget { get; set; }
+
     /// <summary>Populated by CopybookParser.ComputeOffsets.</summary>
     public int Start { get; set; }
     public int Len { get; set; }

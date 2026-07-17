@@ -213,6 +213,7 @@ public static class CopybookParser
         public string Name = "";
         public FieldSpec? Field;
         public int OccursCount = 1;
+        public string? RedefinesTarget;
     }
 
     private static ParsedStatement? ParseStatement(string statement)
@@ -248,6 +249,7 @@ public static class CopybookParser
         var signSeparate = false;
         var signLeading = false;
         var occursCount = 1;
+        string? redefinesTarget = null;
 
         var i = 2;
         while (i < tokens.Length)
@@ -333,11 +335,18 @@ public static class CopybookParser
                 }
 
                 case "REDEFINES":
-                    throw new FormatException(
-                        $"REDEFINES is not supported: field '{name}' would redefine another field's " +
-                        "bytes, which this parser does not model — every field is assumed to occupy its " +
-                        "own bytes, never bytes another field also claims. See README's " +
-                        "'Not supported (v1)' section.");
+                    // "REDEFINES target-name": this item overlays a prior sibling's
+                    // bytes rather than starting at the running offset. Capture the
+                    // target name here; the overlay (and target resolution / fail-loud
+                    // if it's not a valid prior sibling) happens in ComputeOffsets,
+                    // which is where sibling offsets are known.
+                    if (i + 1 >= tokens.Length)
+                        throw new FormatException(
+                            $"REDEFINES must be followed by the name of the item it redefines: field '{name}' " +
+                            $"in \"{statement}\".");
+                    redefinesTarget = tokens[i + 1];
+                    i += 2;
+                    break;
 
                 // Binary integer USAGE — COMP / COMPUTATIONAL / COMP-4 / COMP-5 /
                 // BINARY. Big-endian two's-complement (signed) or magnitude
@@ -442,7 +451,14 @@ public static class CopybookParser
         if (pictureText != null)
             field = BuildFieldSpec(name, Pic.ParsePicClause(pictureText), comp3, binary, signSeparate, signLeading);
 
-        return new ParsedStatement { LevelNumber = level, Name = name, Field = field, OccursCount = occursCount };
+        return new ParsedStatement
+        {
+            LevelNumber = level,
+            Name = name,
+            Field = field,
+            OccursCount = occursCount,
+            RedefinesTarget = redefinesTarget,
+        };
     }
 
     /// <summary>
@@ -616,6 +632,7 @@ public static class CopybookParser
             {
                 Field = parsed.Field,
                 OccursCount = parsed.OccursCount,
+                RedefinesTarget = parsed.RedefinesTarget,
             };
 
             while (stack.Count > 0 && stack[stack.Count - 1].LevelNumber >= node.LevelNumber)
@@ -690,16 +707,58 @@ public static class CopybookParser
     /// field) are laid out once, then the whole item is multiplied so that every
     /// field after it starts past all the copies. The per-copy field offsets
     /// themselves are materialized later, in <see cref="Flatten"/>.
+    ///
+    /// A child carrying a REDEFINES target does NOT start at the running offset:
+    /// it overlays the named prior sibling, starting at that sibling's byte offset
+    /// and sharing its bytes. It adds no storage — the next ordinary sibling
+    /// continues from where it would have without the redefinition — unless the
+    /// redefinition is longer than its target, in which case the group extends to
+    /// cover it. A group's length is therefore the MAX end-offset of its children,
+    /// not the running cumulative sum (the two coincide when nothing overlaps).
     /// </summary>
     public static int ComputeOffsets(CopybookNode node, int startOffset)
     {
         int oneIterationLen;
         if (node.IsGroup)
         {
-            var offset = startOffset;
+            var running = startOffset;   // where the next ORDINARY sibling begins
+            var maxEnd = startOffset;    // farthest byte any child reaches
+            // Prior siblings, by name, to resolve a REDEFINES target's offset.
+            // Latest definition of a name wins (COBOL names are normally unique
+            // among siblings; a later duplicate would shadow an earlier one, which
+            // is the sensible reading for "the prior sibling of this name").
+            var priorSiblingStart = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+
             foreach (var child in node.Children)
-                offset = ComputeOffsets(child, offset);
-            oneIterationLen = offset - startOffset;
+            {
+                int childStart;
+                if (child.RedefinesTarget != null)
+                {
+                    if (!priorSiblingStart.TryGetValue(child.RedefinesTarget, out childStart))
+                        throw new FormatException(
+                            $"REDEFINES target '{child.RedefinesTarget}' not found for field '{child.Name}': " +
+                            "a REDEFINES must name a prior item at the same level in the same group. No such " +
+                            $"prior sibling exists in group '{node.Name}'. (A forward reference, a mis-typed " +
+                            "name, or a target at a different level all trip this — the overlay offset would " +
+                            "otherwise be a silent guess.)");
+
+                    ComputeOffsets(child, childStart);
+                    // No new storage: the running offset only advances if this
+                    // redefinition reaches past where the next sibling already sits.
+                    running = Math.Max(running, childStart + child.Len);
+                }
+                else
+                {
+                    childStart = running;
+                    ComputeOffsets(child, childStart);
+                    running = childStart + child.Len;
+                }
+
+                maxEnd = Math.Max(maxEnd, childStart + child.Len);
+                priorSiblingStart[child.Name] = childStart;
+            }
+
+            oneIterationLen = maxEnd - startOffset;
         }
         else
         {
