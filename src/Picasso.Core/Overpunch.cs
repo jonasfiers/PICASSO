@@ -48,7 +48,7 @@ internal static class Overpunch
 
         throw new FormatException(
             $"Character '{c}' (U+{(int)c:X4}) is not a valid overpunched sign digit " +
-            "({{A-I for positive, }}J-R for negative, or 0-9 for alternate positive).");
+            "({A-I for positive, }J-R for negative, or 0-9 for alternate positive).");
     }
 
     /// <summary>
