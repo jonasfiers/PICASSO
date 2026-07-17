@@ -154,4 +154,48 @@ public class QuoteAwareSplitTests
         Assert.Single(statements);
         Assert.Equal("05 A PIC X(20) VALUE 'a.b.c'", statements[0]);
     }
+
+    // ---- Edge cases verified during review, pinned here as regression guards ----
+
+    [Fact]
+    public void ForeignDelimiterInsideLiteral_IsOrdinaryData()
+    {
+        // A double quote inside a single-quoted literal (and vice versa) is
+        // ordinary literal content, not a delimiter, so periods around it stay data.
+        var singleHoldingDouble = CopybookParser.SplitStatements("05 A PIC X(20) VALUE 'he said \"hi.\" ok'.");
+        Assert.Single(singleHoldingDouble);
+        Assert.Equal("05 A PIC X(20) VALUE 'he said \"hi.\" ok'", singleHoldingDouble[0]);
+
+        var doubleHoldingSingle = CopybookParser.SplitStatements("05 A PIC X(20) VALUE \"o'clock. sharp\".");
+        Assert.Single(doubleHoldingSingle);
+        Assert.Equal("05 A PIC X(20) VALUE \"o'clock. sharp\"", doubleHoldingSingle[0]);
+    }
+
+    [Fact]
+    public void PeriodImmediatelyAfterOpeningQuote_IsData()
+    {
+        var source =
+            "01 REC.\n" +
+            "   05 A PIC X(5) VALUE '.abc.'.\n" +
+            "   05 B PIC X(3).\n";
+
+        var parsed = CopybookParser.Parse(source);
+
+        Assert.Equal(new[] { "A", "B" }, parsed.Flat.Select(f => f.Name));
+        Assert.Equal(5, parsed.Flat[1].Start);
+        Assert.Equal(8, parsed.Root.Len);
+    }
+
+    [Fact]
+    public void UnterminatedLiteral_FailsLoudly_NoHang()
+    {
+        // A stray unterminated quote must not hang or silently miscompute — it
+        // swallows the rest into one statement and Parse rejects it loudly.
+        var source =
+            "01 REC.\n" +
+            "   05 A PIC X(5) VALUE 'oops no close.\n" +
+            "   05 B PIC X(3).\n";
+
+        Assert.Throws<System.FormatException>(() => CopybookParser.Parse(source));
+    }
 }
