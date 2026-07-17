@@ -1,0 +1,17 @@
+<svg viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg">
+  <rect width="128" height="128" rx="24" fill="#1B2340"/>
+
+  <!-- Raw byte, single cell -->
+  <rect x="16" y="44" width="40" height="40" rx="7" fill="#12172B" stroke="#3A4270" stroke-width="2.5"/>
+  <text x="36" y="71" text-anchor="middle" font-family="'JetBrains Mono', monospace" font-weight="700" font-size="20" fill="#9AA3C0">01</text>
+
+  <!-- Flow arrow -->
+  <path d="M60,64 L70,64" stroke="#9AA3C0" stroke-width="3" stroke-linecap="round"/>
+  <path d="M66,58 L74,64 L66,70" fill="none" stroke="#9AA3C0" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <!-- Four typed swatches, stacked -->
+  <rect x="80" y="22" width="32" height="18" rx="6" fill="#E8437E"/>
+  <rect x="80" y="44" width="32" height="18" rx="6" fill="#FF6F59"/>
+  <rect x="80" y="66" width="32" height="18" rx="6" fill="#F5A623"/>
+  <rect x="80" y="88" width="32" height="18" rx="6" fill="#C6F135"/>
+</svg>
