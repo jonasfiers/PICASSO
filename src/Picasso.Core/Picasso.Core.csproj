@@ -10,4 +10,15 @@
     <PackageReference Include="System.Text.Json" Version="10.0.10" />
   </ItemGroup>
 
+  <!--
+    The bundled copybooks and their seed data ship inside the assembly: once
+    Picasso.Core.dll is referenced from an Integration Studio extension there
+    is no repo tree next to it to read from disk. specs.js is deliberately not
+    embedded — it is the parity test's golden fixture, not a sample to serve.
+  -->
+  <ItemGroup>
+    <EmbeddedResource Include="Samples\**\*.cpy" />
+    <EmbeddedResource Include="Samples\**\*.DAT" />
+  </ItemGroup>
+
 </Project>
