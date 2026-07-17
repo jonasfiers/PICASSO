@@ -34,6 +34,69 @@ public class CopybookParserTests
         Assert.Contains("01  A-REC.", stripped);
     }
 
+    // ---- Fixed-format source (columns 1-6 sequence number, column 7 indicator) ----
+
+    [Fact]
+    public void StripsSequenceNumbersAndColumn7CommentsFromFixedFormatSource()
+    {
+        var source =
+            "000100*   A COMMENT LINE, INDICATED BY THE '*' IN COLUMN 7\n" +
+            "000200 01  A-REC.\n" +
+            "000300     05  B PIC X(3).\n" +
+            "000400     05  C PIC 9(4).\n";
+
+        var parsed = CopybookParser.Parse(source);
+
+        Assert.Equal(new[] { "B", "C" }, parsed.Flat.Select(f => f.Name));
+        Assert.Equal(0, parsed.Flat[0].Start);
+        Assert.Equal(3, parsed.Flat[1].Start);
+        Assert.Equal(7, parsed.Root.Len);
+    }
+
+    [Fact]
+    public void FixedAndFreeFormatLinesCanMixInOneCopybook()
+    {
+        // Exactly the shape of the bundled DTAR020.cpy: a free-format 01-level
+        // prepended to a fixed-format copy member. Detection is per line.
+        var source =
+            "01  A-REC.\n" +
+            "000100*   FIXED-FORMAT COMMENT\n" +
+            "000200     05  B PIC X(3).\n" +
+            "    05  C PIC X(2). *> free-format comment\n";
+
+        var parsed = CopybookParser.Parse(source);
+
+        Assert.Equal(new[] { "B", "C" }, parsed.Flat.Select(f => f.Name));
+        Assert.Equal(5, parsed.Root.Len);
+    }
+
+    [Fact]
+    public void IgnoresFixedFormatContentBeyondColumn72()
+    {
+        // Columns 73-80 are an identification area the compiler ignores. Here it
+        // holds junk that would otherwise tokenize into the PIC clause's entry.
+        var line = "000200     05  B PIC X(3).";
+        var padded = line.PadRight(72) + "PROGID99";
+        Assert.Equal(80, padded.Length);
+
+        var parsed = CopybookParser.Parse("000100 01  A-REC.\n" + padded + "\n");
+
+        Assert.Equal("B", Assert.Single(parsed.Flat).Name);
+        Assert.Equal(3, parsed.Root.Len);
+        Assert.DoesNotContain("PROGID99", CopybookParser.StripComments(padded));
+    }
+
+    [Fact]
+    public void FreeFormatLevelNumbersAreNotMistakenForSequenceNumbers()
+    {
+        // Regression guard for the detection rule: only six leading digits mark a
+        // line as fixed-format, and free-format code never opens a line that way.
+        var stripped = CopybookParser.StripComments("01  A-REC.\n    05  B PIC 9(6).\n");
+
+        Assert.Contains("01  A-REC.", stripped);
+        Assert.Contains("05  B PIC 9(6).", stripped);
+    }
+
     [Fact]
     public void RealCopybookCommentBannerIsStrippedEntirely()
     {

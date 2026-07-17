@@ -123,9 +123,11 @@ public static class SampleLibrary
             DataResource = null,
             Description =
                 "A genuine mainframe copybook (1990, credited 'BRUCE ARTHUR', from a real reporting " +
-                "system) — not written for this project. See Samples/dtar020/README.md for provenance " +
-                "and the two real limitations it surfaced (fixed-format source, EBCDIC text) that no " +
-                "synthetic copybook exposed. No bundled sample data: the real DTAR020.bin is EBCDIC and " +
+                "system) — not written for this project, and bundled in its original fixed-format form: " +
+                "sequence numbers intact, parsed as-is. See Samples/dtar020/README.md for provenance and " +
+                "the limitations it surfaced that no synthetic copybook exposed — fixed-format source " +
+                "(now handled), EBCDIC text and headless copy members (not). " +
+                "No bundled sample data: the real DTAR020.bin is EBCDIC and " +
                 "has no newline delimiters between records, so it needs handling this action surface " +
                 "doesn't yet offer — see Dtar020RealWorldTests.cs for how it's actually decoded.",
         },

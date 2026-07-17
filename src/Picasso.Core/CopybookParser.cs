@@ -33,10 +33,30 @@ public static class CopybookParser
     }
 
     /// <summary>
-    /// Strips free-format "*&gt;" comments (to end of line, anywhere on
-    /// the line) and traditional fixed-format column-7 "*" comment lines.
-    /// Column position otherwise carries no meaning here: every real
-    /// copybook in this project is compiled with `cobc -x -free`.
+    /// Columns 1-6 of a traditional fixed-format line: a six-digit line-sequence
+    /// number. Free-format COBOL never opens a line with six digits — real lines
+    /// start with a level number ("01", "05") or a keyword — so a match here
+    /// identifies the line as fixed-format on its own, with no mode flag needed.
+    /// Detection is per line, so a file may mix both forms.
+    /// </summary>
+    private static readonly Regex FixedFormatSequenceNumber =
+        new Regex(@"^\d{6}", RegexOptions.Compiled);
+
+    /// <summary>Columns 8-72 of a fixed-format line, once columns 1-6 are gone.</summary>
+    private const int FixedFormatCodeLength = 66;
+
+    /// <summary>
+    /// Strips free-format "*&gt;" comments (to end of line, anywhere on the
+    /// line) and handles traditional fixed-format lines: the columns-1-6
+    /// sequence number is dropped, a '*' in column 7 marks the whole line as a
+    /// comment, and anything at or past column 73 (the identification area, which
+    /// the compiler ignores) is truncated so it can't reach the tokenizer.
+    ///
+    /// A statement wrapping across several fixed-format lines needs no special
+    /// handling: SplitStatements splits on '.' across the whole document and
+    /// collapses embedded newlines. The column-7 '-' continuation indicator
+    /// (splitting a text literal with no intervening space) is an intentional
+    /// non-goal — PICASSO never parses literal content.
     /// </summary>
     public static string StripComments(string source)
     {
@@ -45,8 +65,22 @@ public static class CopybookParser
         {
             var line = rawLine;
 
-            // Traditional fixed-format: column 7 (0-indexed: 6) is '*'.
-            if (line.Length > 6 && line[6] == '*' && (line.Length == 7 || line[7] != '>'))
+            if (FixedFormatSequenceNumber.IsMatch(line))
+            {
+                line = line.Substring(6);
+                if (line.Length > FixedFormatCodeLength)
+                    line = line.Substring(0, FixedFormatCodeLength);
+
+                // What was column 7 is now the first character.
+                if (line.Length > 0 && line[0] == '*')
+                {
+                    sb.Append('\n');
+                    continue;
+                }
+            }
+            // Fixed-format comment line whose sequence number is blank rather
+            // than numbered: column 7 (0-indexed: 6) is '*'.
+            else if (line.Length > 6 && line[6] == '*' && (line.Length == 7 || line[7] != '>'))
             {
                 sb.Append('\n');
                 continue;

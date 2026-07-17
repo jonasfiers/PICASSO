@@ -12,10 +12,11 @@ namespace Picasso.Core.Tests;
 /// copybook (dated 19/12/90, credited "BRUCE ARTHUR", from an actual
 /// reporting system) with a real 379-record binary extract, sourced from
 /// github.com/bmTas/CobolToJson (LGPL-2.1). See Samples/dtar020/README.md
-/// for the two real gaps running it uncovered — fixed-format source and
-/// EBCDIC text — neither of which any synthetic copybook had exposed.
+/// for the gaps running it uncovered — neither of which any synthetic
+/// copybook had exposed. Its fixed-format source is now parsed natively;
+/// EBCDIC text and headless (no 01-level) copy members are still open.
 ///
-/// Because of those two gaps, this test does not call the public
+/// Because of those remaining gaps, this test does not call the public
 /// FlatFileCodec.Decode (it assumes newline-delimited records; DTAR020.bin
 /// has none) or assert anything about DTAR020-KEYCODE-NO (it's EBCDIC;
 /// PICASSO only supports ASCII/Latin-1 text). It decodes the four COMP-3
@@ -25,10 +26,27 @@ namespace Picasso.Core.Tests;
 /// </summary>
 public class Dtar020RealWorldTests
 {
-    private static ParsedCopybook ParseDtar020()
+    private static ParsedCopybook ParseDtar020() =>
+        CopybookParser.Parse(File.ReadAllText(SamplePaths.Root("dtar020/DTAR020.cpy")));
+
+    /// <summary>
+    /// The bundled DTAR020.cpy is now nothing but the original mainframe file
+    /// with a synthetic 01-level prepended: its sequence numbers and column-7
+    /// comment indicators are left exactly as they arrived, and the parser
+    /// handles them. This asserts the old hand-cleaning workaround stays gone —
+    /// every other test here would still pass against a pre-stripped file.
+    /// </summary>
+    [Fact]
+    public void BundledCopybookIsTheOriginalFixedFormatFile_PlusOnlyThe01Wrapper()
     {
-        var source = File.ReadAllText(SamplePaths.Root("dtar020/DTAR020.cpy"));
-        return CopybookParser.Parse(source);
+        var original = File.ReadAllText(SamplePaths.Root("dtar020/DTAR020-ORIGINAL.cbl"));
+        var bundled = File.ReadAllText(SamplePaths.Root("dtar020/DTAR020.cpy"));
+
+        Assert.Equal("01  DTAR020-REC.\n" + original, bundled);
+        Assert.Contains("000900        03  DTAR020-KCODE-STORE-KEY.", bundled);
+
+        // ...and it parses, sequence numbers and all.
+        Assert.Equal(27, CopybookParser.Parse(bundled).Flat.Sum(f => f.Len));
     }
 
     [Fact]
