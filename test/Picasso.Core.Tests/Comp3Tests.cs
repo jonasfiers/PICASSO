@@ -35,22 +35,22 @@ public class Comp3Tests
     [Fact]
     public void EncodesUnsignedValue_AlwaysUsesFSignNibble()
     {
-        // digits=5, scale=0 -> (5+1)=6 nibbles, even, no pad.
+        // digits=5, scale=0, value=12345 -> (5+1)=6 nibbles, even, no pad.
+        // nibble stream: 1 2 3 4 5 F  ->  0x12 0x34 0x5F
         var bytes = Comp3.Encode(12345m, digits: 5, scale: 0, signed: false);
-        Assert.Equal(new byte[] { 0x01, 0x23, 0x45, 0xF0 | 0 }, SwapLastNibbleCheck(bytes));
-        Assert.Equal(new byte[] { 0x01, 0x23, 0x45 }, bytes.Take(3));
-        Assert.Equal(0xF, bytes[3] & 0xF); // sign nibble is F, unsigned
+        Assert.Equal(new byte[] { 0x12, 0x34, 0x5F }, bytes);
+        Assert.Equal(0xF, bytes[bytes.Length - 1] & 0xF);
     }
 
     [Fact]
     public void EncodesOddNibbleCount_PadsWithLeadingZeroNibble()
     {
-        // digits=9, scale=2, signed -> (9+1)=10 nibbles... even actually.
-        // Use digits=8 -> (8+1)=9 nibbles, odd -> one pad nibble.
+        // digits=8, scale=2, value=123.45 -> digit string "00012345".
+        // (8+1)=9 nibbles is odd, so a leading zero pad nibble is prepended.
+        // nibble stream: 0(pad) 0 0 0 1 2 3 4 5 C  ->  0x00 0x00 0x12 0x34 0x5C
         var bytes = Comp3.Encode(123.45m, digits: 8, scale: 2, signed: true);
-        Assert.Equal(5, bytes.Length); // ceil(9/2) = 5 bytes = 10 nibbles (1 pad + 8 digits + 1 sign)
-        // nibbles: [0(pad), 0,0,1,2,3,4,5, C]
-        Assert.Equal(new byte[] { 0x00, 0x01, 0x23, 0x45, 0xC0 | 0 }, PadCheck(bytes));
+        Assert.Equal(5, bytes.Length); // ceil((8+1)/2)
+        Assert.Equal(new byte[] { 0x00, 0x00, 0x12, 0x34, 0x5C }, bytes);
     }
 
     [Fact]
@@ -81,18 +81,5 @@ public class Comp3Tests
     {
         var bytes = new byte[] { 0x01, 0x23, 0x45, 0x62 }; // sign nibble 0x2 is invalid
         Assert.Throws<FormatException>(() => Comp3.Decode(bytes, 7, 2, true));
-    }
-
-    private static byte[] PadCheck(byte[] bytes) => bytes;
-    private static byte[] SwapLastNibbleCheck(byte[] bytes) => bytes;
-}
-
-internal static class ByteArrayExtensions
-{
-    public static byte[] Take(this byte[] bytes, int count)
-    {
-        var result = new byte[count];
-        Array.Copy(bytes, result, count);
-        return result;
     }
 }
