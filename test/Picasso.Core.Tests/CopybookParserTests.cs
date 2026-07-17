@@ -88,6 +88,76 @@ public class CopybookParserTests
     }
 
     [Fact]
+    public void StripsCols73IdentificationAreaWhenCols1To6SequenceAreaIsBlank()
+    {
+        // Real fixed-format copybooks often leave columns 1-6 blank while still
+        // carrying an 8-digit sequence number in columns 73-80. With cols 1-6
+        // blank the numeric-detection path never fires; without this rule the
+        // trailing "00030000" leaks into the tokenizer and falsely rejects the
+        // layout with "Malformed copybook entry".
+        var source =
+            "       01 REC.".PadRight(72) + "00010000\n" +
+            "          05 A PIC X(3).".PadRight(72) + "00020000\n" +
+            "          05 B PIC 9(4).".PadRight(72) + "00030000\n";
+
+        var parsed = CopybookParser.Parse(source);
+
+        Assert.Equal(new[] { "A", "B" }, parsed.Flat.Select(f => f.Name));
+        Assert.Equal(0, parsed.Flat[0].Start);
+        Assert.Equal(3, parsed.Flat[0].Len);
+        Assert.Equal(3, parsed.Flat[1].Start);
+        Assert.Equal(4, parsed.Flat[1].Len);
+        Assert.Equal(7, parsed.Root.Len);
+
+        var stripped = CopybookParser.StripComments(source);
+        Assert.DoesNotContain("00030000", stripped);
+    }
+
+    [Fact]
+    public void FreeFormatLineUnderColumn72IsUntouched()
+    {
+        // A short free-format line never reaches the cols-73 rule.
+        var line = "    05  B PIC X(3).";
+        Assert.True(line.Length <= 72);
+        var stripped = CopybookParser.StripComments(line + "\n");
+        Assert.Contains("05  B PIC X(3).", stripped);
+    }
+
+    [Fact]
+    public void FreeFormatLineWithNonNumericTailPastColumn72IsPreserved()
+    {
+        // Content that legitimately runs past column 72 but is NOT an all-numeric
+        // identification area (here a text VALUE literal) must be preserved: the
+        // digit/space test (a) fails, so nothing is stripped.
+        var line = "    05  MSG PIC X(80) VALUE 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaLONGLITERALtail'.";
+        Assert.True(line.Length > 72);
+
+        var stripped = CopybookParser.StripComments(line + "\n");
+
+        Assert.Contains("LONGLITERALtail", stripped);
+        Assert.Contains("VALUE 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaLONGLITERALtail'.", stripped);
+    }
+
+    [Fact]
+    public void FreeFormatNumericLiteralRunningContinuouslyPastColumn72IsPreserved()
+    {
+        // A numeric VALUE literal that runs continuously past column 72 has NO
+        // space immediately before the digits at column 73, so the space-gap test
+        // (b) fails and the tail is preserved. Constructed so the character at
+        // column 72 (0-indexed 71) is a digit that is part of the literal.
+        var prefix = "    05  BIGNUM PIC 9(40) VALUE ";
+        var digits = new string('7', 60);
+        var line = prefix + digits + ".";
+        // Column 72 (index 71) must sit inside the run of digits.
+        Assert.True(line.Length > 72);
+        Assert.True(char.IsDigit(line[71]));
+
+        var stripped = CopybookParser.StripComments(line + "\n");
+
+        Assert.Contains(prefix.TrimStart() + digits + ".", stripped);
+    }
+
+    [Fact]
     public void FreeFormatLevelNumbersAreNotMistakenForSequenceNumbers()
     {
         // Regression guard for the detection rule: only six leading digits mark a
