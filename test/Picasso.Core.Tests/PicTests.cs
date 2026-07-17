@@ -76,6 +76,8 @@ public class PicTests
     [Fact]
     public void RejectsUnrecognizedCharacters()
     {
-        Assert.Throws<System.FormatException>(() => Pic.ParsePicClause("9(3)Z"));
+        // '@' is not a picture symbol at all — still rejected loudly, even now
+        // that the edit symbols (Z $ , . - + …) are recognized.
+        Assert.Throws<System.FormatException>(() => Pic.ParsePicClause("9@9"));
     }
 }

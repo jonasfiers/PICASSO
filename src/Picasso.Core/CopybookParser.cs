@@ -177,6 +177,19 @@ public static class CopybookParser
             current.Append(c);
         }
 
+        // A literal opened but never closed swallowed the rest of the copybook
+        // into one statement. Historically the malformed statement was caught
+        // downstream (a leaked terminator period landed in a PIC token, which the
+        // strict picture parser rejected); now that the picture parser recognizes
+        // '.' as an edit symbol, that incidental backstop is gone, so the
+        // unterminated literal is rejected here at its source — loudly, never a
+        // silent single-field miscompute. No well-formed copybook trips this.
+        if (quote != '\0')
+            throw new FormatException(
+                $"Unterminated string literal (opening {quote}) in copybook source: a VALUE literal was " +
+                "opened but never closed, which would swallow the rest of the copybook into a single " +
+                "statement. Check the copybook's quoting.");
+
         Flush();
         return statements;
     }
@@ -412,6 +425,27 @@ public static class CopybookParser
 
     private static FieldSpec BuildFieldSpec(string name, PicSpec pic, bool comp3, bool signSeparate, bool signLeading)
     {
+        // An edited picture (Z $ , . - + CR DB …) is not value-interpreted: Pic
+        // computed its exact display width, and it is surfaced as a Text field of
+        // that width — byte passthrough that round-trips unchanged. COMP-3 and
+        // SIGN IS ... SEPARATE are nonsensical on an edited (character-formatted)
+        // picture, so both combinations are rejected loudly, exactly as they are
+        // for a plain alphanumeric field below.
+        if (pic.Category == PicCategory.Edited)
+        {
+            if (comp3)
+                throw new FormatException($"COMP-3 cannot be combined with an edited PIC clause: field '{name}'.");
+            if (signSeparate)
+                throw new FormatException($"SIGN IS ... SEPARATE cannot be combined with an edited PIC clause: field '{name}'.");
+
+            return new FieldSpec
+            {
+                Name = name,
+                Type = FieldType.Text,
+                Len = pic.Length,
+            };
+        }
+
         if (pic.Category == PicCategory.Alphanumeric)
         {
             if (comp3)
