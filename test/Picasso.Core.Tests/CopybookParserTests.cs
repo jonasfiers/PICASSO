@@ -56,8 +56,9 @@ public class CopybookParserTests
     [Fact]
     public void FixedAndFreeFormatLinesCanMixInOneCopybook()
     {
-        // Exactly the shape of the bundled DTAR020.cpy: a free-format 01-level
-        // prepended to a fixed-format copy member. Detection is per line.
+        // Detection is per line, so a free-format 01 and a fixed-format copy
+        // member can sit in one file — the shape DTAR020.cbl needed before the
+        // parser learned to supply the 01 itself.
         var source =
             "01  A-REC.\n" +
             "000100*   FIXED-FORMAT COMMENT\n" +
@@ -171,6 +172,101 @@ public class CopybookParserTests
         Assert.False(artistId.IsGroup);
         Assert.NotNull(artistId.Field);
         Assert.Empty(artistId.Children);
+    }
+
+    // ---- Headless copy members (no 01 of their own) ----
+
+    /// <summary>
+    /// A copy member written to be COPY'd into a record the including program
+    /// names — the ordinary shape for an FD record layout. The parser supplies
+    /// the 01 that COBOL would have gotten from the program.
+    /// </summary>
+    [Fact]
+    public void SuppliesAnO1ForAHeadlessCopyMember()
+    {
+        var parsed = CopybookParser.Parse(@"
+            03  A-GROUP.
+                05  B PIC X(3).
+                05  C PIC X(2).
+            03  D PIC X(4).
+        ");
+
+        Assert.True(parsed.RootIsSynthetic);
+        Assert.Equal(1, parsed.Root.LevelNumber);
+        Assert.Equal(CopybookParser.SyntheticRecordName, parsed.Root.Name);
+        Assert.Equal(new[] { "A-GROUP", "D" }, parsed.Root.Children.Select(c => c.Name));
+
+        // The wrapper is structural only — it moves nothing.
+        Assert.Equal(new[] { "B", "C", "D" }, parsed.Flat.Select(f => f.Name));
+        Assert.Equal(new[] { 0, 3, 5 }, parsed.Flat.Select(f => f.Start));
+        Assert.Equal(9, parsed.Root.Len);
+    }
+
+    /// <summary>
+    /// The discriminator that matters. Two 01 records and a headless fragment
+    /// both used to hit one error, but they are not the same thing: two 01s are
+    /// alternative record layouts, and wrapping them would silently concatenate
+    /// them into a single record that describes neither.
+    /// </summary>
+    [Fact]
+    public void TwoO1RecordsAreStillRejectedRatherThanMergedIntoOne()
+    {
+        var ex = Assert.Throws<FormatException>(() => CopybookParser.Parse(@"
+            01  FIRST-REC.
+                05  A PIC X(3).
+            01  SECOND-REC.
+                05  B PIC X(4).
+        "));
+
+        Assert.Contains("FIRST-REC", ex.Message);
+        Assert.Contains("SECOND-REC", ex.Message);
+        Assert.Contains("alternative layouts", ex.Message);
+    }
+
+    [Fact]
+    public void ACopybookWithItsOwnO1IsUntouched()
+    {
+        var parsed = CopybookParser.Parse("01  R.\n    05  A PIC X(3).\n");
+
+        Assert.False(parsed.RootIsSynthetic);
+        Assert.Equal("R", parsed.Root.Name);
+    }
+
+    [Fact]
+    public void ASingleHeadlessGroupIsAlsoWrapped()
+    {
+        // This one already produced the right layout before, rooted at 03. It
+        // gets the same 01 as any other headless member, so "the root is the
+        // record" holds for every copybook rather than most of them.
+        var parsed = CopybookParser.Parse("03  A-GROUP.\n    05  B PIC X(3).\n");
+
+        Assert.True(parsed.RootIsSynthetic);
+        Assert.Equal(1, parsed.Root.LevelNumber);
+        Assert.Equal("A-GROUP", Assert.Single(parsed.Root.Children).Name);
+    }
+
+    [Fact]
+    public void TheSyntheticRecordNameIsTheCallersToChoose()
+    {
+        // The copybook genuinely doesn't say what the record is called — that
+        // name lives in the program that COPY's it, which PICASSO never sees.
+        var parsed = CopybookParser.Parse("03  A PIC X(3).\n", "DTAR020-REC");
+
+        Assert.True(parsed.RootIsSynthetic);
+        Assert.Equal("DTAR020-REC", parsed.Root.Name);
+
+        Assert.Throws<ArgumentException>(() => CopybookParser.Parse("03  A PIC X(3).\n", "  "));
+    }
+
+    [Fact]
+    public void HeadlessEntriesDisagreeingOnLevelNumberAreRejected()
+    {
+        // Siblings of one record share a level number. Anything else is
+        // malformed, and which record it was meant to be isn't guessable.
+        var ex = Assert.Throws<FormatException>(
+            () => CopybookParser.Parse("05  A PIC X(3).\n03  B PIC X(2).\n"));
+
+        Assert.Contains("disagree on level number", ex.Message);
     }
 
     // ---- ComputeOffsets ----

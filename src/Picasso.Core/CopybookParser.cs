@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
 using Picasso.Core.Models;
@@ -15,12 +16,25 @@ namespace Picasso.Core;
 /// </summary>
 public static class CopybookParser
 {
-    public static ParsedCopybook Parse(string source)
+    /// <summary>
+    /// Parses copybook source into a tree plus a flat field list.
+    ///
+    /// <paramref name="recordName"/> names the 01 record synthesized for a
+    /// headless copy member — one with no 01 of its own. It's a caller choice
+    /// because the copybook genuinely doesn't say: the real name lives in the
+    /// program that COPY's it, which PICASSO never sees. Ignored for a copybook
+    /// that has its own 01. Check <see cref="ParsedCopybook.RootIsSynthetic"/>
+    /// to tell whether it was used.
+    /// </summary>
+    public static ParsedCopybook Parse(string source, string recordName = SyntheticRecordName)
     {
+        if (string.IsNullOrWhiteSpace(recordName))
+            throw new ArgumentException("Record name cannot be blank.", nameof(recordName));
+
         var stripped = StripComments(source);
         var statements = SplitStatements(stripped);
 
-        var root = BuildTree(statements);
+        var root = BuildTree(statements, recordName, out var rootIsSynthetic);
         if (root is null)
             throw new FormatException("Copybook has no data-item entries.");
 
@@ -29,7 +43,7 @@ public static class CopybookParser
         var flat = new List<FieldSpec>();
         Flatten(root, flat);
 
-        return new ParsedCopybook(root, flat);
+        return new ParsedCopybook(root, flat, rootIsSynthetic);
     }
 
     /// <summary>
@@ -243,9 +257,39 @@ public static class CopybookParser
         };
     }
 
-    public static CopybookNode? BuildTree(IReadOnlyList<string> statements)
+    /// <summary>
+    /// The name given to the 01 record synthesized for a headless copy member.
+    /// Deliberately not a plausible COBOL name: it names something the copybook
+    /// itself never said, so it should not read as though it did.
+    /// </summary>
+    public const string SyntheticRecordName = "SYNTHETIC-RECORD";
+
+    public static CopybookNode? BuildTree(IReadOnlyList<string> statements) =>
+        BuildTree(statements, SyntheticRecordName, out _);
+
+    /// <summary>
+    /// Resolves level-number nesting into a tree.
+    ///
+    /// A copy member with no 01 of its own — entries starting at 03 or 05,
+    /// meant to be COPY'd into a record the including program names — gets one
+    /// synthesized, named <paramref name="recordName"/>, and
+    /// <paramref name="rootIsSynthetic"/> comes back true. That shape is
+    /// ordinary in real copybooks (an FD record layout is usually written this
+    /// way), and the wrapper changes no field's offset or length: it only gives
+    /// the tree the root that COBOL would have gotten from the program.
+    ///
+    /// Two 01-level records in one copybook is a different thing entirely and
+    /// still an error. Those are alternative record layouts, not siblings, and
+    /// wrapping them would silently concatenate them into one wrong record.
+    /// </summary>
+    public static CopybookNode? BuildTree(
+        IReadOnlyList<string> statements,
+        string recordName,
+        out bool rootIsSynthetic)
     {
-        CopybookNode? root = null;
+        rootIsSynthetic = false;
+
+        var tops = new List<CopybookNode>();
         var stack = new List<CopybookNode>();
 
         foreach (var statementText in statements)
@@ -257,22 +301,45 @@ public static class CopybookParser
                 stack.RemoveAt(stack.Count - 1);
 
             if (stack.Count == 0)
-            {
-                if (root != null)
-                    throw new FormatException(
-                        $"Copybook has more than one top-level entry ('{root.Name}' and '{node.Name}') — " +
-                        "multiple 01-level records per copybook are not supported.");
-                root = node;
-            }
+                tops.Add(node);
             else
-            {
                 stack[stack.Count - 1].Children.Add(node);
-            }
 
             stack.Add(node);
         }
 
-        return root;
+        if (tops.Count == 0)
+            return null;
+
+        // A single 01 record: the ordinary case, nothing to do.
+        if (tops.Count == 1 && tops[0].LevelNumber == 1)
+            return tops[0];
+
+        if (tops.Any(t => t.LevelNumber == 1))
+        {
+            if (tops.Count == 1)
+                return tops[0];
+
+            throw new FormatException(
+                $"Copybook has more than one top-level record ('{tops[0].Name}' and '{tops[1].Name}') — " +
+                "multiple records per copybook are not supported. These are alternative layouts, not " +
+                "fields of one record, so they cannot be merged into a single structure.");
+        }
+
+        // Headless: no 01 anywhere. Siblings of one record must share a level
+        // number; anything else is malformed and is not guessed at.
+        var level = tops[0].LevelNumber;
+        var odd = tops.FirstOrDefault(t => t.LevelNumber != level);
+        if (odd != null)
+            throw new FormatException(
+                $"Copybook has no 01-level record, and its top-level entries disagree on level number " +
+                $"(level {level} '{tops[0].Name}' vs level {odd.LevelNumber} '{odd.Name}'). " +
+                "Entries of one record must share a level number.");
+
+        var synthetic = new CopybookNode(recordName, 1);
+        synthetic.Children.AddRange(tops);
+        rootIsSynthetic = true;
+        return synthetic;
     }
 
     public static int ComputeOffsets(CopybookNode node, int startOffset)

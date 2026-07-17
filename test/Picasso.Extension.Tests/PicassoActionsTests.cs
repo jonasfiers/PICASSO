@@ -440,7 +440,7 @@ public class PicassoActionsTests
 
         Assert.Contains(names, n => n.EndsWith("Samples.PORTRAIT-REC.cpy", StringComparison.Ordinal));
         Assert.Contains(names, n => n.EndsWith("Samples.data.PORTRAIT-SAMPLE.DAT", StringComparison.Ordinal));
-        Assert.Contains(names, n => n.EndsWith("Samples.dtar020.DTAR020.cpy", StringComparison.Ordinal));
+        Assert.Contains(names, n => n.EndsWith("Samples.dtar020.DTAR020.cbl", StringComparison.Ordinal));
         Assert.Contains(names, n => n.EndsWith("Samples.dtar020.DTAR020.bin", StringComparison.Ordinal));
         Assert.Equal(22, names.Length); // 11 copybooks + 11 data files
         Assert.DoesNotContain(names, n => n.EndsWith("specs.js", StringComparison.Ordinal));

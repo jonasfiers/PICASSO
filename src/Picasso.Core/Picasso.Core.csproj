@@ -18,6 +18,7 @@
   -->
   <ItemGroup>
     <EmbeddedResource Include="Samples\**\*.cpy" />
+    <EmbeddedResource Include="Samples\**\*.cbl" />
     <EmbeddedResource Include="Samples\**\*.DAT" />
     <EmbeddedResource Include="Samples\**\*.bin" />
   </ItemGroup>

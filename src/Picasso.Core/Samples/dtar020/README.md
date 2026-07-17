@@ -4,17 +4,18 @@ Every other bundled sample is either CATALOG-74's own layout or a synthetic one 
 
 ## Files here
 
-- **`DTAR020-ORIGINAL.cbl`** — exactly as downloaded. Traditional fixed-format COBOL source: columns 1–6 are line-sequence numbers, column 7 is the comment indicator.
-- **`DTAR020.cpy`** — byte-for-byte the original, with a synthetic `01 DTAR020-REC.` line prepended and nothing else changed. Sequence numbers and column-7 comment indicators are left exactly as they arrived; the parser handles them. This is the copybook PICASSO actually parses.
+- **`DTAR020.cbl`** — exactly as downloaded, and parsed exactly as it is. Traditional fixed-format COBOL source: columns 1–6 are line-sequence numbers, column 7 is the comment indicator. Headless, too — it opens at level `03`. Nothing is prepended, stripped, or cleaned.
 - **`DTAR020.bin`** — the real binary data, unmodified. Bundled as this sample's data; needs `EBCDIC` + `FIXED`, which the sample reports.
+
+There used to be a third file — a hand-cleaned `DTAR020.cpy` with the sequence numbers stripped and an `01` prepended, because the parser couldn't read the real thing. Every gap that file existed to work around is now closed, so it's gone.
 
 ## What running the real thing against PICASSO actually found
 
-**The COMP-3 decode is correct.** Once `DTAR020.cpy` exists, PICASSO derives the exact 27-byte layout the copybook's own comment claims ("RECORD LENGTH IS 27"), and decodes every numeric field across all 379 records correctly — including negative packed-decimal values. [`Dtar020RealWorldTests.cs`](../../../../test/Picasso.Core.Tests/Dtar020RealWorldTests.cs) checks this against values independently published in CobolToJson's own README, not anything derived from PICASSO itself.
+**The COMP-3 decode is correct.** PICASSO derives the exact 27-byte layout the copybook's own comment claims ("RECORD LENGTH IS 27"), and decodes every numeric field across all 379 records correctly — including negative packed-decimal values. [`Dtar020RealWorldTests.cs`](../../../../test/Picasso.Core.Tests/Dtar020RealWorldTests.cs) checks this against values independently published in CobolToJson's own README, not anything derived from PICASSO itself.
 
-Four real gaps surfaced that no synthetic copybook had, because synthetic copybooks don't have these problems by construction. Three are now fixed; one remains.
+Four real gaps surfaced that no synthetic copybook had, because synthetic copybooks don't have these problems by construction. All four are now fixed — and the file that proved each one is the unmodified original, which is the point.
 
-1. **Fixed-format COBOL source wasn't handled — now it is.** `CopybookParser` used to assume free-format source (no sequence-number columns), true of every other copybook here: they're compiled with `cobc -x -free`. Fed the original file, it misread the sequence numbers ("000900", "001000", ...) as level numbers and silently produced one garbage field instead of failing loudly. The parser now detects a fixed-format line by its six leading digits and strips columns 1–6, drops column-7 `*` comment lines, and ignores columns 73–80 — per line, so both formats can mix in one file. `DTAR020.cpy` no longer strips anything by hand, which is what makes it a real test of this.
+1. **Fixed-format COBOL source wasn't handled — now it is.** `CopybookParser` used to assume free-format source (no sequence-number columns), true of every other copybook here: they're compiled with `cobc -x -free`. Fed the original file, it misread the sequence numbers ("000900", "001000", ...) as level numbers and silently produced one garbage field instead of failing loudly. The parser now detects a fixed-format line by its six leading digits and strips columns 1–6, drops column-7 `*` comment lines, and ignores columns 73–80 — per line, so both formats can mix in one file. Nothing is stripped by hand any more, which is what makes this a real test rather than a fixture.
 
 2. **DTAR020-KEYCODE-NO (the one `PIC X` text field) used to decode to garbage: EBCDIC — now handled.** The real file encodes text in EBCDIC cp037, not ASCII, and PICASSO was Latin-1 only, so `"69684558"` came back as `"öùöøôõõø"`. Passing `CharacterEncoding.Ebcdic037` now decodes it to the value CobolToJson's README publishes, and re-encoding those published values reproduces the real file's 27 bytes exactly.
 
@@ -24,10 +25,12 @@ Four real gaps surfaced that no synthetic copybook had, because synthetic copybo
 
    That path deliberately does no newline normalization, and this file is why: it carries 21 `0x0D` bytes *inside its COMP-3 fields* (`0x0D` is the digit 0 with a negative sign nibble). In an undelimited file `0x0D` and `0x0A` are data, not structure — the delimited path's `Replace("\r\n", "\n")` would silently eat one and shift every record after it. The format is never auto-detected either: a delimited file's length can divide evenly by the record length too (27 delimited 27-byte records are 756 bytes, and 756 / 27 = 28), so guessing could return a plausible count of misaligned records.
 
-4. **It's headless.** The original file starts at level `03`, with no wrapping `01` — it's a copy member meant to be `COPY`'d into a program's own record, which is a common, legitimate real-world copybook shape. The parser requires a single top-level entry, so the synthetic `01` line prepended in `DTAR020.cpy` is still needed.
+4. **It's headless — now handled.** The file starts at level `03`, with no wrapping `01`: it's a copy member meant to be `COPY`'d into a program's own record, which is a common, legitimate real-world shape (an FD record layout is usually written this way). The parser now supplies the `01` that COBOL would have gotten from the including program, and reports `RootIsSynthetic` so a caller can tell the record name came from PICASSO rather than from the copybook — the real name lives in the program that `COPY`s it, which PICASSO never sees, so it's a caller choice with a deliberately synthetic default.
+
+   Two `01`-level records in one copybook still fails, and that's a different case rather than the same one: those are alternative record layouts, so wrapping them together would silently concatenate them into a record describing neither.
 
 **All of which means the whole file now works end to end.** `RoundtripsTheEntireRealFile_ByteForByte` decodes all 379 records — fixed-format copybook, EBCDIC text, packed decimals, no delimiters — and re-encodes them to the same 10,233 bytes, through nothing but the public API.
 
 `DTAR020.bin` is now offered as selectable sample data through `GetSampleCopybook`, which reports `TextEncoding = "EBCDIC"` and `RecordFormat = "FIXED"` alongside the bytes. Those aren't advisory: the settings are carried on the sample because they aren't detectable from the data, and handing a caller these bytes unmarked would decode to plausible garbage — the silent wrong answer this sample exists to expose. It's the only bundled sample that needs anything other than the defaults, which is exactly why it's worth shipping.
 
-Gap 4 remains open — see the main [README](../../../../README.md)'s "Not supported (v1)" section.
+See the main [README](../../../../README.md)'s "Not supported (v1)" section for what PICASSO still doesn't do — none of it is anything DTAR020 needs.

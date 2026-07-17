@@ -29,6 +29,7 @@ The proof is [`ParityWithCatalog74Tests`](test/Picasso.Core.Tests/ParityWithCata
 
 - **Parses** multi-level group/elementary structures, `PIC 9(n)`, `PIC X(n)`, implied decimal (`V`), `SIGN IS LEADING/TRAILING SEPARATE`, and **COMP-3** packed decimal.
 - **Reads both source formats** — free-format (`*>` comments) and traditional fixed-format, where columns 1–6 are a line-sequence number, column 7 flags a comment, and columns 73–80 are an identification area to ignore. Detection is per line, so the two can mix in one file; no mode flag to pass.
+- **Accepts headless copy members** — a copybook with no `01` of its own, written to be `COPY`'d into a record the including program names. PICASSO supplies the `01` COBOL would have gotten from that program, and says it did (`RootIsSynthetic`). Two `01` records in one copybook is a different thing and still refused: those are alternative layouts, not fields of one record.
 - **Derives** the flat byte layout: `{Name, Start, Len, Type, Digits, Scale, Signed, Comp3}` per field.
 - **Decodes / encodes** fixed-width flat files against that layout, round-tripping byte-for-byte — in ASCII/Latin-1, or in **EBCDIC cp037** for a real mainframe extract. The encoding is applied per field, never to the record as a whole, so COMP-3 bytes are left alone: running packed decimals through a code page table is what destroys them.
 - **Reads both record formats** — newline-delimited, or **undelimited fixed-length** (the mainframe's RECFM=F: a bare concatenation with nothing between records, sliced by the layout's own width). Unlike the source format, this is a caller choice rather than detected — see below.
@@ -36,9 +37,9 @@ The proof is [`ParityWithCatalog74Tests`](test/Picasso.Core.Tests/ParityWithCata
 
 It ships eleven bundled copybooks (the nine real CATALOG-74 layouts, one synthetic, and one genuine 1990s mainframe copybook), each with data attached, embedded in the assembly.
 
-None of the data is hand-authored. Seven files are CATALOG-74's own seed data. Two — `AMOUNT-OWED.DAT` and `AMOUNT-PAID.DAT` — are real GnuCOBOL output, captured by compiling CATALOG-74's `CALC-OWED`/`CALC-PAID` and running the batch, which matters because those two layouts have no hand-written `specs.js` counterpart to check against: a real COBOL runtime is the better golden anyway. `PORTRAIT-SAMPLE.DAT` is generated through PICASSO's own encoder rather than typed out, because hand-authoring COMP-3 nibbles is exactly the error-prone transcription this project exists to avoid. The eleventh, `DTAR020.bin`, is a real 1990s mainframe extract, unmodified.
+None of the data is hand-authored. Seven files are CATALOG-74's own seed data. Two — `AMOUNT-OWED.DAT` and `AMOUNT-PAID.DAT` — are real GnuCOBOL output, captured by compiling CATALOG-74's `CALC-OWED`/`CALC-PAID` and running the batch, which matters because those two layouts have no hand-written `specs.js` counterpart to check against: a real COBOL runtime is the better golden anyway. `PORTRAIT-SAMPLE.DAT` is generated through PICASSO's own encoder rather than typed out, because hand-authoring COMP-3 nibbles is exactly the error-prone transcription this project exists to avoid. And `DTAR020.bin` is a real 1990s mainframe extract, byte-for-byte as it came off the system.
 
-The eleventh, [**DTAR020**](src/Picasso.Core/Samples/dtar020/README.md), isn't CATALOG-74's and isn't synthetic — it's a real copybook from an actual reporting system, dated 19/12/90. Running it as-is is what found the fixed-format-source, EBCDIC, undelimited-record, and headless-copy-member gaps. The first three are now handled: the whole 10,233-byte file — fixed-format copybook, EBCDIC text, packed decimals, no delimiters — decodes to typed values and re-encodes to the same bytes it arrived as, through nothing but the public API. It's bundled as a selectable sample, and it's the only one whose data needs anything other than the default settings — `GetSampleCopybook` reports the `EBCDIC` and `FIXED` it requires, because neither is detectable from the bytes.
+The eleventh, [**DTAR020**](src/Picasso.Core/Samples/dtar020/README.md), isn't CATALOG-74's and isn't synthetic — it's a real copybook from an actual reporting system, dated 19/12/90. Running it as-is is what found the fixed-format-source, EBCDIC, undelimited-record, and headless-copy-member gaps — all four now handled. Both its files are bundled byte-for-byte as downloaded, with nothing adapted for PICASSO: the whole 10,233-byte extract decodes to typed values and re-encodes to the same bytes it arrived as, through nothing but the public API. It's the only sample whose data needs anything other than the default settings, and `GetSampleCopybook` reports the `EBCDIC` and `FIXED` it requires, because neither is detectable from the bytes.
 
 ## The one deliberate discrepancy
 
@@ -62,10 +63,9 @@ PICASSO models it the way COBOL defines it: **one** `NET-BALANCE` field spanning
 - **`OCCURS`** — repeating groups. A flat `{Start, Len}` list can't express "this 20-byte block, 12 times"; it needs either indexed field names or a nested result shape.
 - **`REDEFINES`** — two names for the same bytes. Which is thematically ironic for a project named after a Cubist, and duly noted.
 - **Overpunched signs** — `PIC S9(5)` without an explicit `SIGN IS ... SEPARATE` clause is rejected rather than guessed at. Failing loudly beats mis-sizing a field by one byte and corrupting everything downstream of it.
-- **Headless copy members** — a copybook starting at level `03` with no wrapping `01`, meant to be `COPY`'d into a program's own record, is a common real-world shape the parser doesn't yet accept. The genuine 1990s mainframe copybook bundled at [`Samples/dtar020/`](src/Picasso.Core/Samples/dtar020/README.md) is one, and gets a synthetic `01` prepended by hand.
 - **EBCDIC variants other than cp037** — cp037 (US/Canada) is supported and is the variant DTAR020 uses. cp273 (German), cp500 (International), cp1047 and the rest of the family disagree on punctuation placement, and there's no real file here to verify them against, so they're not guessed at.
 
-Levels 66 (`RENAMES`) and 88 (condition-names) are rejected with a named error.
+Levels 66 (`RENAMES`) and 88 (condition-names) are rejected with a named error, as are two `01`-level records in one copybook — those are alternative layouts rather than fields of one record, and merging them would describe neither.
 
 ## Layout
 
@@ -80,7 +80,8 @@ src/
     OutSystemsPreview.cs     Flat layout -> OutSystems attribute rows
     SampleLibrary.cs         The bundled copybooks, embedded in the assembly
     Samples/                 9 real CATALOG-74 copybooks + seed data, 1 synthetic,
-                             1 real mainframe copybook + its real extract
+                             1 real mainframe copybook + its real extract, both
+                             byte-for-byte as downloaded
   Picasso.Extension/       The Integration Studio action surface
     PicassoActions.cs
     README-IntegrationStudio.md

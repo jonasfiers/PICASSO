@@ -31,12 +31,23 @@ public sealed class CopybookNode
 
 public sealed class ParsedCopybook
 {
-    public ParsedCopybook(CopybookNode root, IReadOnlyList<FieldSpec> flat)
+    public ParsedCopybook(CopybookNode root, IReadOnlyList<FieldSpec> flat, bool rootIsSynthetic = false)
     {
         Root = root;
         Flat = flat;
+        RootIsSynthetic = rootIsSynthetic;
     }
 
     public CopybookNode Root { get; }
     public IReadOnlyList<FieldSpec> Flat { get; }
+
+    /// <summary>
+    /// True when the copybook had no 01 of its own and the parser supplied one
+    /// — a headless copy member, meant to be COPY'd into a record the including
+    /// program names. Exposed rather than left implicit: <see cref="Root"/> then
+    /// carries a name PICASSO invented, not one the copybook ever stated, and a
+    /// caller showing the tree should be able to tell the difference. No field's
+    /// offset or length is affected either way.
+    /// </summary>
+    public bool RootIsSynthetic { get; }
 }

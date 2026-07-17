@@ -143,16 +143,17 @@ public static class SampleLibrary
         new Sample
         {
             Id = "dtar020-rec",
-            CopybookResource = "Samples.dtar020.DTAR020.cpy",
+            CopybookResource = "Samples.dtar020.DTAR020.cbl",
             DataResource = "Samples.dtar020.DTAR020.bin",
             TextEncoding = CharacterEncoding.Ebcdic037,
             RecordFormat = RecordFormat.FixedLength,
             Description =
                 "A genuine mainframe copybook (1990, credited 'BRUCE ARTHUR', from a real reporting " +
-                "system) — not written for this project, and bundled in its original fixed-format form: " +
-                "sequence numbers intact, parsed as-is. See Samples/dtar020/README.md for provenance and " +
-                "the limitations it surfaced that no synthetic copybook exposed — fixed-format source, " +
-                "EBCDIC text and undelimited records (all now handled), headless copy members (not). " +
+                "system) — not written for this project, and bundled byte-for-byte as downloaded: " +
+                "fixed-format source with its sequence numbers intact, and headless (it starts at level " +
+                "03, so the parser supplies the 01 record it was written to be COPY'd into). Nothing " +
+                "about it is adapted for PICASSO. See Samples/dtar020/README.md for provenance and the " +
+                "four limitations it surfaced that no synthetic copybook exposed. " +
                 "Its data is the real 379-record extract, unmodified: EBCDIC cp037 text with no record " +
                 "delimiters, so it is the one sample whose TextEncoding and RecordFormat are not the " +
                 "defaults. Use the ones this descriptor reports and it round-trips byte-for-byte.",

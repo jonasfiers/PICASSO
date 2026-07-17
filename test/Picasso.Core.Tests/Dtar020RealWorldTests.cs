@@ -13,41 +13,70 @@ namespace Picasso.Core.Tests;
 /// copybook (dated 19/12/90, credited "BRUCE ARTHUR", from an actual
 /// reporting system) with a real 379-record binary extract, sourced from
 /// github.com/bmTas/CobolToJson (LGPL-2.1). See Samples/dtar020/README.md
-/// for the gaps running it uncovered, none of which any synthetic copybook
-/// had exposed. Its fixed-format source and its EBCDIC text are both handled
-/// now; two gaps remain — it's a headless copy member (no 01 level), so the
-/// bundled .cpy still needs a synthetic 01 prepended, and DTAR020.bin has no
-/// record delimiters, which FlatFileCodec's newline-based record splitting
-/// can't chop up.
+/// for the four gaps running it uncovered, none of which any synthetic
+/// copybook had exposed: fixed-format source, EBCDIC text, undelimited
+/// records, and a headless copy member. All four are handled now, so both
+/// bundled files are byte-for-byte as downloaded — nothing here is adapted
+/// for PICASSO, which is what makes this a real test rather than a fixture.
 ///
-/// That second gap is why the whole-file assertions here still slice records
-/// by offset by hand rather than calling FlatFileCodec.Decode over the file.
 /// Every expected value below is one CobolToJson's own README publishes —
 /// nothing here is derived from PICASSO.
 /// </summary>
 public class Dtar020RealWorldTests
 {
     private static ParsedCopybook ParseDtar020() =>
-        CopybookParser.Parse(File.ReadAllText(SamplePaths.Root("dtar020/DTAR020.cpy")));
+        CopybookParser.Parse(File.ReadAllText(SamplePaths.Root("dtar020/DTAR020.cbl")));
 
     /// <summary>
-    /// The bundled DTAR020.cpy is now nothing but the original mainframe file
-    /// with a synthetic 01-level prepended: its sequence numbers and column-7
-    /// comment indicators are left exactly as they arrived, and the parser
-    /// handles them. This asserts the old hand-cleaning workaround stays gone —
-    /// every other test here would still pass against a pre-stripped file.
+    /// The whole point of this sample: the bundled copybook is the mainframe
+    /// file exactly as downloaded — sequence numbers, column-7 comments, and no
+    /// 01 record — parsed with nothing prepended, stripped, or cleaned. Every
+    /// other test here would still pass against a hand-adapted file; this one
+    /// is what stops the workarounds coming back.
     /// </summary>
     [Fact]
-    public void BundledCopybookIsTheOriginalFixedFormatFile_PlusOnlyThe01Wrapper()
+    public void BundledCopybookIsTheUnmodifiedMainframeFile()
     {
-        var original = File.ReadAllText(SamplePaths.Root("dtar020/DTAR020-ORIGINAL.cbl"));
-        var bundled = File.ReadAllText(SamplePaths.Root("dtar020/DTAR020.cpy"));
+        var bundled = File.ReadAllText(SamplePaths.Root("dtar020/DTAR020.cbl"));
 
-        Assert.Equal("01  DTAR020-REC.\n" + original, bundled);
+        // Fixed-format, sequence numbers intact...
         Assert.Contains("000900        03  DTAR020-KCODE-STORE-KEY.", bundled);
+        // ...headless: it opens at level 03, with no 01 anywhere.
+        Assert.DoesNotContain("01  ", bundled);
+        Assert.StartsWith("000100*", bundled);
 
-        // ...and it parses, sequence numbers and all.
-        Assert.Equal(27, CopybookParser.Parse(bundled).Flat.Sum(f => f.Len));
+        var parsed = CopybookParser.Parse(bundled);
+        Assert.Equal(27, parsed.Flat.Sum(f => f.Len));
+        Assert.True(parsed.RootIsSynthetic);
+    }
+
+    /// <summary>
+    /// The 01 the parser supplies is the one COBOL would have gotten from the
+    /// program that COPY'd this member — it names the record, and changes no
+    /// field's offset or length.
+    /// </summary>
+    [Fact]
+    public void TheSyntheticRecordWrapsTheRealEntriesWithoutMovingThem()
+    {
+        var parsed = ParseDtar020();
+
+        Assert.True(parsed.RootIsSynthetic);
+        Assert.Equal(1, parsed.Root.LevelNumber);
+        Assert.Equal(CopybookParser.SyntheticRecordName, parsed.Root.Name);
+
+        // The copybook's own entries hang off it, still at level 03.
+        Assert.Equal(
+            new[] { "DTAR020-KCODE-STORE-KEY", "DTAR020-DATE", "DTAR020-DEPT-NO",
+                    "DTAR020-QTY-SOLD", "DTAR020-SALE-PRICE" },
+            parsed.Root.Children.Select(c => c.Name));
+        Assert.All(parsed.Root.Children, c => Assert.Equal(3, c.LevelNumber));
+
+        // Naming it is the caller's to make; the layout doesn't depend on it.
+        var named = CopybookParser.Parse(
+            File.ReadAllText(SamplePaths.Root("dtar020/DTAR020.cbl")), "DTAR020-REC");
+        Assert.Equal("DTAR020-REC", named.Root.Name);
+        Assert.Equal(parsed.Flat.Select(f => f.Start), named.Flat.Select(f => f.Start));
+        Assert.Equal(parsed.Flat.Select(f => f.Len), named.Flat.Select(f => f.Len));
     }
 
     [Fact]
