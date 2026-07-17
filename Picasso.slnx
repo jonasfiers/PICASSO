@@ -1,0 +1,10 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Picasso.Core/Picasso.Core.csproj" />
+    <Project Path="src/Picasso.Extension/Picasso.Extension.csproj" />
+  </Folder>
+  <Folder Name="/test/">
+    <Project Path="test/Picasso.Core.Tests/Picasso.Core.Tests.csproj" />
+    <Project Path="test/Picasso.Extension.Tests/Picasso.Extension.Tests.csproj" />
+  </Folder>
+</Solution>
