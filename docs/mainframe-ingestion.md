@@ -1,8 +1,8 @@
 # Ingesting a real mainframe file directly
 
-PICASSO parses and decodes; it has no network code. This spec covers the rest of the path — pulling a real fixed-width extract off a mainframe via SFTP and decoding it through PICASSO's actions inside a published OutSystems app — and what would need to change in this repo to do it safely.
+PICASSO parses and decodes; it has no network code. This covers the rest of the path — pulling a real fixed-width extract off a mainframe via SFTP and decoding it through PICASSO's actions inside a published OutSystems app.
 
-**The short version:** feasible, and most of it isn't new work. OutSystems Forge already has mature SFTP components; PICASSO's own parsing already proved itself against a real EBCDIC/COMP-3/fixed-length mainframe file ([DTAR020](../src/Picasso.Core/Samples/dtar020/README.md)). The one real gap is how bytes get from an OutSystems Binary Data value into PICASSO without silently corrupting them — and that gap is small, specific, and worth closing in this repo rather than leaving to whoever wires up the app.
+**The short version:** feasible, and most of it isn't new work. OutSystems Forge already has mature SFTP components; PICASSO's own parsing already proved itself against a real EBCDIC/COMP-3/fixed-length mainframe file ([DTAR020](../src/Picasso.Core/Samples/dtar020/README.md)). The one real gap — how bytes get from an OutSystems Binary Data value into PICASSO without silently corrupting them — is closed: `DecodeRecordsFromBinary`/`EncodeRecordsToBinary` exist for exactly this. Everything from here is app-level wiring, not a PICASSO change.
 
 ## Architecture
 
@@ -13,7 +13,7 @@ Mainframe (z/OS OpenSSH / SFTP server)
 OutSystems SFTP component  →  Binary Data
     │
     ▼
-PicassoActions.DecodeRecordsFromBinary(...)   ← new action, see below
+PicassoActions.DecodeRecordsFromBinary(...)
     │
     ▼
 Decoded records (JSON) → an OutSystems Structure/RecordList
@@ -29,27 +29,27 @@ Classic FTP has an ASCII transfer mode that z/OS's FTP server uses to auto-trans
 
 An OutSystems `Get` action hands back `Binary Data`. Getting from there to the `Text` `DecodeRecords` expects today means converting bytes → string — and PICASSO's whole contract (see the README's "A note on encoding") requires that conversion to be one byte per char (Latin-1), never the platform default of UTF-8. Relying on whoever wires up the OutSystems app to remember that, correctly, every time, is the same class of mistake as forgetting FTP binary mode: silent, plausible-looking corruption, discovered only when a packed-decimal field comes out wrong.
 
-The robust fix is to not hand that responsibility to the app at all: add actions that accept/return `Binary Data` directly, doing the exact byte↔char mapping PICASSO already trusts internally (the same one `SampleLibrary`'s `Latin1()` helper already uses for embedded resources) rather than asking OutSystems' generic Text conversion to get it right by accident.
+The robust fix is to not hand that responsibility to the app at all: `PicassoActions` now has two actions that accept/return `Binary Data` directly, doing the exact byte↔char mapping PICASSO already trusts internally rather than asking OutSystems' generic Text conversion to get it right by accident.
 
-## New actions needed in `PicassoActions.cs`
+## The actions
 
 ```csharp
 public bool DecodeRecordsFromBinary(string flatSpecJson, byte[] fixedWidthData,
-    out string recordsJson, out string errorMessage);
+    string textEncoding, string recordFormat, out string recordsJson, out string errorMessage);
 
 public bool EncodeRecordsToBinary(string flatSpecJson, string recordsJson,
-    out byte[] fixedWidthData, out string errorMessage);
+    string textEncoding, string recordFormat, out byte[] fixedWidthData, out string errorMessage);
 ```
 
-`byte[]` is what Integration Studio's generated stub uses for the OutSystems `Binary Data` type — same mapping convention as the existing five actions use for `Text`/`Boolean`. Internally, both delegate to the existing `FlatFileCodec` after converting via the same Latin-1 byte↔char mapping already in `SampleLibrary`, which should be factored out into one shared internal helper (say, `Latin1.cs` alongside `Ebcdic.cs`) so there's exactly one place that mapping lives, not two copies that can drift.
+(Each also has the same shorter 2- and 3-argument overloads `DecodeRecords`/`EncodeRecords` already have, defaulting to Latin-1/newline-delimited.)
 
-This is the one actual code change this spec calls for. Everything else below is app-level wiring, not a PICASSO change.
+`byte[]` is what Integration Studio's generated stub uses for the OutSystems `Binary Data` type — same mapping convention the other actions use for `Text`/`Boolean`. Internally, both convert via `Latin1.cs` — the one place that byte↔char mapping lives, shared with `SampleLibrary` rather than duplicated — and then delegate straight to the existing `DecodeRecords`/`EncodeRecords`, so there's exactly one decode/encode implementation underneath both entry points. See [`README-IntegrationStudio.md`](../src/Picasso.Extension/README-IntegrationStudio.md) for the actual Integration Studio wiring.
 
 ## The OutSystems app flow
 
 1. Timer, Process, or a button's action calls the chosen SFTP Forge component's Get action (host, credentials, remote path) → `Binary Data`.
 2. Call `ParseCopybook` (or `GetSampleCopybook`, if the layout is one of the bundled ones) with the copybook source for this feed. In practice the layout is known ahead of time for a real integration — check the `.cpy` into the app's own resources or a Site Property, don't try to re-derive it from an unknown source at runtime.
-3. Call `DecodeRecordsFromBinary(flatSpecJson, binaryData)` → `recordsJson`.
+3. Call `DecodeRecordsFromBinary(flatSpecJson, binaryData, textEncoding, recordFormat)` → `recordsJson` — `"EBCDIC"`/`"FIXED"` for a typical raw mainframe extract, matching whatever `GetSampleCopybook` reports for `dtar020-rec` if modeling this on that sample.
 4. `JSONDeserialize` into a Structure/RecordList shaped for this layout. Same open problem [`outsystems-app-spec.md`](outsystems-app-spec.md) already flags for the demo app: decoded records have a shape that varies per copybook, and OutSystems Structures are fixed-shape — the same answer applies here (a generic Text-keyed structure, or a small JS/Advanced widget, per copybook).
 5. Do whatever the integration actually needs with the records (write to an Entity, display, forward on).
 

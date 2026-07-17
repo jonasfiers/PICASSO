@@ -445,4 +445,69 @@ public class PicassoActionsTests
         Assert.Equal(22, names.Length); // 11 copybooks + 11 data files
         Assert.DoesNotContain(names, n => n.EndsWith("specs.js", StringComparison.Ordinal));
     }
+
+    // ---- Binary Data actions ----
+
+    [Fact]
+    public void DecodeRecordsFromBinaryMatchesDecodeRecordsOnTheRealMainframeExtract()
+    {
+        // dtar020-rec's real bytes, taken as actual bytes rather than routed
+        // through Text at any point -- this is what an SFTP Get would hand an
+        // OutSystems flow, never a pre-converted string.
+        Assert.True(_actions.GetSampleCopybook(
+            "dtar020-rec", out var copybook, out var dataAsText,
+            out var textEncoding, out var recordFormat, out var error), error);
+        var rawBytes = Picasso.Core.Latin1.ToBytes(dataAsText);
+        Assert.Equal(10233, rawBytes.Length);
+
+        Assert.True(_actions.ParseCopybook(copybook, out var specJson, out _, out error), error);
+
+        Assert.True(_actions.DecodeRecordsFromBinary(
+            specJson, rawBytes, textEncoding, recordFormat, out var recordsJson, out error), error);
+        Assert.True(_actions.DecodeRecords(
+            specJson, dataAsText, textEncoding, recordFormat, out var recordsJsonFromText, out error), error);
+
+        Assert.Equal(recordsJsonFromText, recordsJson);
+    }
+
+    [Fact]
+    public void EncodeRecordsToBinaryRoundTripsToTheExactOriginalBytes()
+    {
+        Assert.True(_actions.GetSampleCopybook(
+            "dtar020-rec", out var copybook, out var dataAsText,
+            out var textEncoding, out var recordFormat, out var error), error);
+        var originalBytes = Picasso.Core.Latin1.ToBytes(dataAsText);
+
+        Assert.True(_actions.ParseCopybook(copybook, out var specJson, out _, out error), error);
+        Assert.True(_actions.DecodeRecordsFromBinary(
+            specJson, originalBytes, textEncoding, recordFormat, out var recordsJson, out error), error);
+
+        Assert.True(_actions.EncodeRecordsToBinary(
+            specJson, recordsJson, textEncoding, recordFormat, out var reencodedBytes, out error), error);
+
+        Assert.Equal(originalBytes, reencodedBytes);
+    }
+
+    [Fact]
+    public void DecodeRecordsFromBinaryDefaultsMatchDecodeRecordsDefaults()
+    {
+        // An ASCII, newline-delimited sample: the 2-arg and 4-arg overloads
+        // of both the Text and Binary Data actions must agree.
+        Assert.True(_actions.GetSampleCopybook("user-rec", out var copybook, out var dataAsText, out var error), error);
+        Assert.True(_actions.ParseCopybook(copybook, out var specJson, out _, out error), error);
+
+        Assert.True(_actions.DecodeRecordsFromBinary(
+            specJson, Picasso.Core.Latin1.ToBytes(dataAsText), out var recordsJsonBinary, out error), error);
+        Assert.True(_actions.DecodeRecords(specJson, dataAsText, out var recordsJsonText, out error), error);
+
+        Assert.Equal(recordsJsonText, recordsJsonBinary);
+    }
+
+    [Fact]
+    public void DecodeRecordsFromBinaryFailsTheSameWayAsDecodeRecordsOnAMalformedSpec()
+    {
+        Assert.False(_actions.DecodeRecordsFromBinary(
+            "not json", new byte[] { 1, 2, 3 }, out _, out var error));
+        Assert.NotEmpty(error);
+    }
 }

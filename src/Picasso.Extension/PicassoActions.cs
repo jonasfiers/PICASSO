@@ -401,6 +401,114 @@ public sealed class PicassoActions
                 .ToList(),
             Json);
 
+    // ---- Action 6: DecodeRecordsFromBinary ----
+
+    /// <summary>
+    /// Decodes fixed-width Binary Data into records — the Binary Data
+    /// counterpart to <see cref="DecodeRecords(string,string,out string,out string)"/>,
+    /// for a caller whose bytes came from somewhere that hands back Binary
+    /// Data (an SFTP Get, a file upload) rather than Text.
+    /// </summary>
+    public bool DecodeRecordsFromBinary(
+        string flatSpecJson,
+        byte[] fixedWidthData,
+        out string recordsJson,
+        out string errorMessage) =>
+        DecodeRecordsFromBinary(flatSpecJson, fixedWidthData, "", out recordsJson, out errorMessage);
+
+    /// <summary>
+    /// Decodes fixed-width Binary Data into records. <paramref name="textEncoding"/>
+    /// takes the same names as <see cref="DecodeRecords(string,string,string,out string,out string)"/>.
+    /// </summary>
+    public bool DecodeRecordsFromBinary(
+        string flatSpecJson,
+        byte[] fixedWidthData,
+        string textEncoding,
+        out string recordsJson,
+        out string errorMessage) =>
+        DecodeRecordsFromBinary(flatSpecJson, fixedWidthData, textEncoding, "", out recordsJson, out errorMessage);
+
+    /// <summary>
+    /// Decodes fixed-width Binary Data into records. <paramref name="textEncoding"/>
+    /// and <paramref name="recordFormat"/> take the same names as
+    /// <see cref="DecodeRecords(string,string,string,string,out string,out string)"/>.
+    ///
+    /// This exists so the Latin-1 byte↔char mapping <see cref="DecodeRecords(string,string,string,string,out string,out string)"/>
+    /// requires happens inside PICASSO's own trusted code rather than being
+    /// the calling app's job — reaching for OutSystems' default UTF-8
+    /// Binary Data→Text conversion instead would silently corrupt COMP-3 and
+    /// EBCDIC bytes, the same class of mistake this project exists to avoid.
+    /// See docs/mainframe-ingestion.md for the reasoning in full.
+    /// </summary>
+    public bool DecodeRecordsFromBinary(
+        string flatSpecJson,
+        byte[] fixedWidthData,
+        string textEncoding,
+        string recordFormat,
+        out string recordsJson,
+        out string errorMessage) =>
+        DecodeRecords(
+            flatSpecJson, Latin1.ToText(fixedWidthData ?? Array.Empty<byte>()),
+            textEncoding, recordFormat, out recordsJson, out errorMessage);
+
+    // ---- Action 7: EncodeRecordsToBinary ----
+
+    /// <summary>
+    /// Encodes records back to fixed-width Binary Data — the Binary Data
+    /// counterpart to <see cref="EncodeRecords(string,string,out string,out string)"/>,
+    /// for a caller about to hand the bytes to something that wants Binary
+    /// Data (an SFTP Put, a file download) rather than Text.
+    /// </summary>
+    public bool EncodeRecordsToBinary(
+        string flatSpecJson,
+        string recordsJson,
+        out byte[] fixedWidthData,
+        out string errorMessage) =>
+        EncodeRecordsToBinary(flatSpecJson, recordsJson, "", out fixedWidthData, out errorMessage);
+
+    /// <summary>
+    /// Encodes records back to fixed-width Binary Data. <paramref name="textEncoding"/>
+    /// takes the same names as <see cref="EncodeRecords(string,string,string,out string,out string)"/>.
+    /// </summary>
+    public bool EncodeRecordsToBinary(
+        string flatSpecJson,
+        string recordsJson,
+        string textEncoding,
+        out byte[] fixedWidthData,
+        out string errorMessage) =>
+        EncodeRecordsToBinary(flatSpecJson, recordsJson, textEncoding, "", out fixedWidthData, out errorMessage);
+
+    /// <summary>
+    /// Encodes records back to fixed-width Binary Data. <paramref name="textEncoding"/>
+    /// and <paramref name="recordFormat"/> take the same names as
+    /// <see cref="EncodeRecords(string,string,string,string,out string,out string)"/>.
+    /// </summary>
+    public bool EncodeRecordsToBinary(
+        string flatSpecJson,
+        string recordsJson,
+        string textEncoding,
+        string recordFormat,
+        out byte[] fixedWidthData,
+        out string errorMessage)
+    {
+        fixedWidthData = Array.Empty<byte>();
+
+        if (!EncodeRecords(flatSpecJson, recordsJson, textEncoding, recordFormat, out var text, out errorMessage))
+            return false;
+
+        try
+        {
+            fixedWidthData = Latin1.ToBytes(text);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            fixedWidthData = Array.Empty<byte>();
+            errorMessage = ex.Message;
+            return false;
+        }
+    }
+
     // ---- JSON <-> engine ----
 
     private static List<FieldSpec> ReadSpec(string flatSpecJson)

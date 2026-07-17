@@ -230,19 +230,6 @@ public static class SampleLibrary
         using var stream = assembly.GetManifestResourceStream(name)!;
         using var buffer = new MemoryStream();
         stream.CopyTo(buffer);
-        return Latin1(buffer.ToArray());
-    }
-
-    /// <summary>
-    /// One char per raw byte. The seed data contains COMP-3 packed bytes that
-    /// are not valid UTF-8, and Encoding.Latin1 does not exist on
-    /// netstandard2.0 — so the mapping is spelled out rather than assumed.
-    /// </summary>
-    private static string Latin1(byte[] bytes)
-    {
-        var chars = new char[bytes.Length];
-        for (var i = 0; i < bytes.Length; i++)
-            chars[i] = (char)bytes[i];
-        return new string(chars);
+        return Latin1.ToText(buffer.ToArray());
     }
 }

@@ -77,6 +77,7 @@ src/
     Pic.cs                   PIC picture-string parsing
     Comp3.cs                 Packed decimal encode/decode
     Ebcdic.cs                EBCDIC cp037 <-> Unicode, for text bytes only
+    Latin1.cs                Byte <-> char, one-for-one and reversibly
     CopybookParser.cs        Strip → split → parse → tree → offsets → flatten
     FlatFileCodec.cs         Fixed-width text <-> records
     OutSystemsPreview.cs     Flat layout -> OutSystems attribute rows
@@ -123,8 +124,12 @@ Integration Studio and Service Studio are proprietary, Windows-only GUI tools. N
 | `EncodeRecords(flatSpecJson, recordsJson)` | `fixedWidthText` |
 | `GetSampleCopybook(sampleId)` | `copybookSource`, `sampleDataText` |
 | `ListSampleIds()` | JSON array of `{id, filename, description, hasSampleData}` |
+| `DecodeRecordsFromBinary(flatSpecJson, fixedWidthData)` | `recordsJson` |
+| `EncodeRecordsToBinary(flatSpecJson, recordsJson)` | `fixedWidthData` |
 
 Each returns a Boolean success flag plus an `errorMessage`; no exception crosses the boundary. Complex results travel as JSON strings because Integration Studio actions map onto Text/Integer/Decimal/Boolean but not onto arbitrary nested objects — the app deserializes them with OutSystems' built-in `JSONDeserialize`. This is the same pattern real Forge components use when the data shape is dynamic.
+
+The last two take/return OutSystems `Binary Data` rather than `Text` — for a caller whose bytes came from an SFTP `Get` or a file upload rather than already being a string. The byte↔char conversion happens inside these actions using the same Latin-1 mapping (`Latin1.cs`) the rest of the codebase already trusts, rather than asking the calling app to convert `Binary Data` to `Text` correctly itself — reaching for OutSystems' default UTF-8 conversion there would silently corrupt COMP-3/EBCDIC bytes. See [`docs/mainframe-ingestion.md`](docs/mainframe-ingestion.md).
 
 ## A note on encoding
 
