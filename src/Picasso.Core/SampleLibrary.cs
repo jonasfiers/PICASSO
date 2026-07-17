@@ -116,6 +116,19 @@ public static class SampleLibrary
                 "Synthetic demo record. The only sample with 3-level nesting, COMP-3 packed decimal, " +
                 "and SIGN IS LEADING SEPARATE — none of the real copybooks combine all three.",
         },
+        new Sample
+        {
+            Id = "dtar020-rec",
+            CopybookResource = "Samples.dtar020.DTAR020.cpy",
+            DataResource = null,
+            Description =
+                "A genuine mainframe copybook (1990, credited 'BRUCE ARTHUR', from a real reporting " +
+                "system) — not written for this project. See Samples/dtar020/README.md for provenance " +
+                "and the two real limitations it surfaced (fixed-format source, EBCDIC text) that no " +
+                "synthetic copybook exposed. No bundled sample data: the real DTAR020.bin is EBCDIC and " +
+                "has no newline delimiters between records, so it needs handling this action surface " +
+                "doesn't yet offer — see Dtar020RealWorldTests.cs for how it's actually decoded.",
+        },
     };
 
     public static IReadOnlyList<SampleDescriptor> List() =>

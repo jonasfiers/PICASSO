@@ -195,7 +195,7 @@ public class PicassoActionsTests
     public void ListSampleIdsEmitsTheDocumentedShape()
     {
         var rows = JsonDocument.Parse(_actions.ListSampleIds()).RootElement.EnumerateArray().ToList();
-        Assert.Equal(10, rows.Count);
+        Assert.Equal(11, rows.Count);
 
         var portrait = rows.Single(r => r.GetProperty("id").GetString() == "portrait-rec");
         Assert.Equal("PORTRAIT-REC.cpy", portrait.GetProperty("filename").GetString());
@@ -243,12 +243,21 @@ public class PicassoActionsTests
     }
 
     [Fact]
-    public void EveryBundledSampleNowShipsWithData()
+    public void EveryBundledSampleShipsWithDataExceptDtar020()
     {
+        // dtar020-rec is the one deliberate exception: its real data file is
+        // EBCDIC with no newline delimiters, which this action surface has no
+        // way to decode correctly yet — see Samples/dtar020/README.md.
         var rows = JsonDocument.Parse(_actions.ListSampleIds()).RootElement.EnumerateArray().ToList();
-        Assert.All(rows, r => Assert.True(
-            r.GetProperty("hasSampleData").GetBoolean(),
-            $"{r.GetProperty("id").GetString()} reports no sample data"));
+        foreach (var r in rows)
+        {
+            var id = r.GetProperty("id").GetString();
+            var hasSampleData = r.GetProperty("hasSampleData").GetBoolean();
+            if (id == "dtar020-rec")
+                Assert.False(hasSampleData, "dtar020-rec should not report bundled sample data");
+            else
+                Assert.True(hasSampleData, $"{id} reports no sample data");
+        }
     }
 
     [Fact]
@@ -276,7 +285,8 @@ public class PicassoActionsTests
 
         Assert.Contains(names, n => n.EndsWith("Samples.PORTRAIT-REC.cpy", StringComparison.Ordinal));
         Assert.Contains(names, n => n.EndsWith("Samples.data.PORTRAIT-SAMPLE.DAT", StringComparison.Ordinal));
-        Assert.Equal(20, names.Length); // 10 copybooks + 10 data files
+        Assert.Contains(names, n => n.EndsWith("Samples.dtar020.DTAR020.cpy", StringComparison.Ordinal));
+        Assert.Equal(21, names.Length); // 11 copybooks (DTAR020 has no bundled data) + 10 data files
         Assert.DoesNotContain(names, n => n.EndsWith("specs.js", StringComparison.Ordinal));
     }
 }

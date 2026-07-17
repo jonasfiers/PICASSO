@@ -32,9 +32,11 @@ The proof is [`ParityWithCatalog74Tests`](test/Picasso.Core.Tests/ParityWithCata
 - **Decodes / encodes** fixed-width flat files against that layout, round-tripping byte-for-byte.
 - **Previews** the layout as an OutSystems Structure would see it — `PIC 9(n)` → Integer, implied-decimal and COMP-3 → Decimal, `PIC X(n)` → Text.
 
-It ships ten bundled copybooks (the nine real CATALOG-74 layouts, plus one synthetic) with their data, embedded in the assembly.
+It ships eleven bundled copybooks (the nine real CATALOG-74 layouts, one synthetic, and one genuine 1990s mainframe copybook), embedded in the assembly.
 
-None of that data is hand-authored. Seven files are CATALOG-74's own seed data. Two — `AMOUNT-OWED.DAT` and `AMOUNT-PAID.DAT` — are real GnuCOBOL output, captured by compiling CATALOG-74's `CALC-OWED`/`CALC-PAID` and running the batch, which matters because those two layouts have no hand-written `specs.js` counterpart to check against: a real COBOL runtime is the better golden anyway. The last, `PORTRAIT-SAMPLE.DAT`, is generated through PICASSO's own encoder rather than typed out, because hand-authoring COMP-3 nibbles is exactly the error-prone transcription this project exists to avoid.
+None of the data is hand-authored. Seven files are CATALOG-74's own seed data. Two — `AMOUNT-OWED.DAT` and `AMOUNT-PAID.DAT` — are real GnuCOBOL output, captured by compiling CATALOG-74's `CALC-OWED`/`CALC-PAID` and running the batch, which matters because those two layouts have no hand-written `specs.js` counterpart to check against: a real COBOL runtime is the better golden anyway. `PORTRAIT-SAMPLE.DAT` is generated through PICASSO's own encoder rather than typed out, because hand-authoring COMP-3 nibbles is exactly the error-prone transcription this project exists to avoid.
+
+The eleventh, [**DTAR020**](src/Picasso.Core/Samples/dtar020/README.md), isn't CATALOG-74's and isn't synthetic — it's a real copybook from an actual reporting system, dated 19/12/90. Running it as-is is what found the fixed-format-source and EBCDIC gaps above; its own data file isn't bundled as a selectable sample for exactly that reason (see the link).
 
 ## The one deliberate discrepancy
 
@@ -58,6 +60,8 @@ PICASSO models it the way COBOL defines it: **one** `NET-BALANCE` field spanning
 - **`OCCURS`** — repeating groups. A flat `{Start, Len}` list can't express "this 20-byte block, 12 times"; it needs either indexed field names or a nested result shape.
 - **`REDEFINES`** — two names for the same bytes. Which is thematically ironic for a project named after a Cubist, and duly noted.
 - **Overpunched signs** — `PIC S9(5)` without an explicit `SIGN IS ... SEPARATE` clause is rejected rather than guessed at. Failing loudly beats mis-sizing a field by one byte and corrupting everything downstream of it.
+- **Fixed-format COBOL source** — traditional column-1–6 sequence numbers aren't stripped; the parser assumes free-format source (no sequence numbers), true of every copybook here except one. Found by running a genuine 1990s mainframe copybook ([`Samples/dtar020/`](src/Picasso.Core/Samples/dtar020/README.md)) through the parser as-is: it silently misread the sequence numbers as level numbers instead of failing loudly.
+- **EBCDIC** — text (`PIC X`) fields are decoded as ASCII/Latin-1 only. Real mainframe extracts are frequently EBCDIC; COMP-3 is unaffected (packed decimal nibbles aren't a character encoding), but `PIC X` fields decode to garbage. Also found via the DTAR020 sample.
 
 Levels 66 (`RENAMES`) and 88 (condition-names) are rejected with a named error.
 
