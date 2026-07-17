@@ -45,6 +45,16 @@ public static class CopybookParser
         var flat = new List<FieldSpec>();
         Flatten(root, flat);
 
+        // Every elementary field has Len >= 1, so an empty flat list means the
+        // copybook has statements but no storage-bearing field (a bare 01, a
+        // childless group, or a group whose only children are level-88
+        // condition-names). Decoding against that would silently produce a
+        // zero-byte record — fail loudly instead.
+        if (flat.Count == 0)
+            throw new FormatException(
+                "Copybook defines no elementary fields with storage — the record would be zero bytes. " +
+                "A layout needs at least one PIC field.");
+
         return new ParsedCopybook(root, flat, rootIsSynthetic);
     }
 

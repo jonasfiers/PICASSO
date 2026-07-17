@@ -552,6 +552,66 @@ public class CopybookParserTests
         Assert.Equal(5, parsed.Root.Len);
     }
 
+    // ---- No storage-bearing field: fail loudly, never a silent zero-byte record ----
+
+    /// <summary>
+    /// A bare 01 with no children defines no storage. Decoding against it would
+    /// silently yield a zero-byte record, so parsing must fail loudly instead.
+    /// </summary>
+    [Fact]
+    public void RejectsBare01WithNoFields()
+    {
+        var ex = Assert.Throws<FormatException>(() => CopybookParser.Parse("01  R.\n"));
+        Assert.Contains("no elementary fields", ex.Message);
+        Assert.Contains("zero bytes", ex.Message);
+    }
+
+    /// <summary>
+    /// A group whose subtree contains no PIC field carries no storage; the
+    /// record would be zero bytes, so it must be rejected.
+    /// </summary>
+    [Fact]
+    public void RejectsGroupWithNoChildren()
+    {
+        var ex = Assert.Throws<FormatException>(
+            () => CopybookParser.Parse("01  R.\n    05  G.\n"));
+        Assert.Contains("no elementary fields", ex.Message);
+    }
+
+    /// <summary>
+    /// A group whose only child is a level-88 condition-name has that 88 dropped,
+    /// leaving the group childless and the record empty — reject, don't produce a
+    /// silent zero-byte layout.
+    /// </summary>
+    [Fact]
+    public void RejectsGroupWhoseOnlyChildIsAn88()
+    {
+        var ex = Assert.Throws<FormatException>(() => CopybookParser.Parse(
+            "01  R.\n" +
+            "    05  G.\n" +
+            "        88  C VALUE 'X'.\n"));
+        Assert.Contains("no elementary fields", ex.Message);
+    }
+
+    /// <summary>
+    /// The empty-record guard must not misfire when a real field is present
+    /// alongside an 88 that carries no storage: field A survives, the 88 is
+    /// ignored, and the layout parses.
+    /// </summary>
+    [Fact]
+    public void FieldPresentWithOnly88StillParses()
+    {
+        var parsed = CopybookParser.Parse(
+            "01  R.\n" +
+            "    05  A PIC X(3).\n" +
+            "        88  C VALUE 'X'.\n");
+
+        var a = parsed.Flat.Single();
+        Assert.Equal("A", a.Name);
+        Assert.Equal(3, a.Len);
+        Assert.Equal(3, parsed.Root.Len);
+    }
+
     [Fact]
     public void RejectsMultipleTopLevelRecords()
     {
