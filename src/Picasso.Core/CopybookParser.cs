@@ -111,15 +111,73 @@ public static class CopybookParser
         return sb.ToString();
     }
 
+    /// <summary>
+    /// Splits source into statements on the COBOL '.' terminator, but only when
+    /// the period is NOT inside a quoted string literal. A VALUE clause may hold
+    /// a literal like <c>'Thank you... '</c> whose embedded periods are data, not
+    /// terminators — a naive <c>Split('.')</c> would shatter such a literal and
+    /// falsely reject a valid copybook. Both <c>'</c> and <c>"</c> delimiters are
+    /// recognised, and the COBOL doubled-delimiter escape (<c>''</c> inside a
+    /// '-literal, <c>""</c> inside a "-literal) is treated as a literal quote, not
+    /// a close. Each emitted chunk is whitespace-collapsed exactly as before.
+    ///
+    /// Line-continuation of a literal across two source lines (the column-7 '-'
+    /// indicator) is a deliberate non-goal: real copybooks put a VALUE literal on
+    /// one line, and PICASSO never interprets literal content.
+    /// </summary>
     public static List<string> SplitStatements(string text)
     {
         var statements = new List<string>();
-        foreach (var chunk in text.Split('.'))
+        var current = new StringBuilder();
+        char quote = '\0';       // active literal delimiter, or '\0' when outside one
+
+        void Flush()
         {
-            var trimmed = Regex.Replace(chunk, @"\s+", " ").Trim();
+            var trimmed = Regex.Replace(current.ToString(), @"\s+", " ").Trim();
             if (trimmed.Length > 0)
                 statements.Add(trimmed);
+            current.Clear();
         }
+
+        for (var i = 0; i < text.Length; i++)
+        {
+            var c = text[i];
+
+            if (quote != '\0')
+            {
+                // Inside a literal. A doubled delimiter is an escaped quote that
+                // stays in the literal; a lone delimiter closes it.
+                if (c == quote)
+                {
+                    if (i + 1 < text.Length && text[i + 1] == quote)
+                    {
+                        current.Append(c).Append(c);
+                        i++;
+                        continue;
+                    }
+                    quote = '\0';
+                }
+                current.Append(c);
+                continue;
+            }
+
+            if (c == '\'' || c == '"')
+            {
+                quote = c;
+                current.Append(c);
+                continue;
+            }
+
+            if (c == '.')
+            {
+                Flush();
+                continue;
+            }
+
+            current.Append(c);
+        }
+
+        Flush();
         return statements;
     }
 
