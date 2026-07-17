@@ -518,6 +518,15 @@ public static class CopybookParser
                     $"SIGN IS ... SEPARATE cannot be combined with binary (COMP): its sign is intrinsic " +
                     $"to the two's-complement representation, not a separate byte: field '{name}'.");
 
+            // A COBOL numeric item holds at most 18 digits, and the binary width
+            // table (2/4/8 bytes) stops there. Reject an over-long picture here with
+            // a named FormatException that identifies the field — rather than letting
+            // Binary.ByteLength surface a raw ArgumentOutOfRangeException, which would
+            // leak an internal parameter name and break the fail-loud message style.
+            if (pic.Digits > 18)
+                throw new FormatException(
+                    $"Binary (COMP) fields hold at most 18 digits; field '{name}' declares {pic.Digits}.");
+
             return new FieldSpec
             {
                 Name = name,

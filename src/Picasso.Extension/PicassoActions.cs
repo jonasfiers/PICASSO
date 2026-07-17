@@ -639,7 +639,7 @@ public sealed class PicassoActions
         {
             if (!Enum.TryParse<FieldType>(Type, ignoreCase: true, out var type))
                 throw new FormatException(
-                    $"Field '{Name}' has unknown type \"{Type}\". Expected Text, NumericDisplay or Comp3.");
+                    $"Field '{Name}' has unknown type \"{Type}\". Expected Text, NumericDisplay, Comp3 or Binary.");
 
             return new FieldSpec
             {

@@ -316,4 +316,18 @@ public class BinaryTests
         Assert.Equal(11, rows[1].Length); // S9(9)V99 = 11 total digits
         Assert.Equal(2, rows[1].Decimals);
     }
+
+    // ---- Over-long binary picture rejects cleanly (named FormatException, not a
+    //      leaked ArgumentOutOfRangeException from Binary.ByteLength) ----
+
+    [Theory]
+    [InlineData("PIC 9(19) COMP")]
+    [InlineData("PIC S9(19) COMP")]
+    public void BinaryOverEighteenDigitsRejectsWithNamedFieldError(string clause)
+    {
+        var ex = Assert.Throws<FormatException>(() =>
+            CopybookParser.Parse($"01  R.\n    05  BIG {clause}.\n"));
+        Assert.Contains("BIG", ex.Message);
+        Assert.Contains("18 digits", ex.Message);
+    }
 }
