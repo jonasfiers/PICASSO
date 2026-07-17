@@ -3,3 +3,6 @@ obj/
 .vs/
 *.user
 .DS_Store
+
+# Ephemeral agent worktrees (harness-managed)
+.claude/worktrees/
