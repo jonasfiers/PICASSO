@@ -30,6 +30,11 @@ public class RoundtripTests
         { "EXPENSE-REC.cpy", "EXPENSE-MASTER.DAT" },
         { "SHARE-REC.cpy", "SHARE-TRANS.DAT" },
         { "BALANCE-REC.cpy", "BALANCE-MASTER.DAT" },
+        // Batch intermediates. Their data isn't seed input — it's real GnuCOBOL
+        // output, captured by compiling CATALOG-74's own CALC-OWED/CALC-PAID and
+        // running the batch. Bytes an actual COBOL runtime wrote, not ours.
+        { "AMOUNT-OWED-REC.cpy", "AMOUNT-OWED.DAT" },
+        { "AMOUNT-PAID-REC.cpy", "AMOUNT-PAID.DAT" },
     };
 
     /// <summary>

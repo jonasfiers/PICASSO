@@ -32,7 +32,9 @@ The proof is [`ParityWithCatalog74Tests`](test/Picasso.Core.Tests/ParityWithCata
 - **Decodes / encodes** fixed-width flat files against that layout, round-tripping byte-for-byte.
 - **Previews** the layout as an OutSystems Structure would see it — `PIC 9(n)` → Integer, implied-decimal and COMP-3 → Decimal, `PIC X(n)` → Text.
 
-It ships ten bundled copybooks (the nine real CATALOG-74 layouts, plus one synthetic) with their seed data, embedded in the assembly.
+It ships ten bundled copybooks (the nine real CATALOG-74 layouts, plus one synthetic) with their data, embedded in the assembly.
+
+None of that data is hand-authored. Seven files are CATALOG-74's own seed data. Two — `AMOUNT-OWED.DAT` and `AMOUNT-PAID.DAT` — are real GnuCOBOL output, captured by compiling CATALOG-74's `CALC-OWED`/`CALC-PAID` and running the batch, which matters because those two layouts have no hand-written `specs.js` counterpart to check against: a real COBOL runtime is the better golden anyway. The last, `PORTRAIT-SAMPLE.DAT`, is generated through PICASSO's own encoder rather than typed out, because hand-authoring COMP-3 nibbles is exactly the error-prone transcription this project exists to avoid.
 
 ## The one deliberate discrepancy
 

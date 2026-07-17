@@ -83,9 +83,11 @@ public class ParityWithCatalog74Tests
     public void NonTranscribedCopybooksStillParse(string copybookFileName)
     {
         // 7 of the 9 vendored copybooks have a specs.js counterpart. These two
-        // are batch intermediates with no JS-side transcription, so there is no
-        // golden to compare — but they are still part of the real grammar
-        // corpus and must parse.
+        // are batch intermediates the JS API never reads, so there is no hand
+        // transcription to compare against — but they are still part of the real
+        // grammar corpus and must parse. Their derived layout is checked against
+        // real GnuCOBOL output in RoundtripTests instead, which is a stronger
+        // golden than a hand-typed one anyway.
         var derived = Derive(copybookFileName);
         Assert.Equal(3, derived.Count);
         Assert.Equal(new[] { 0, 6, 12 }, derived.Select(f => f.Start));

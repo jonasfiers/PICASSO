@@ -13,7 +13,11 @@ public sealed class SampleDescriptor
     public string FileName { get; set; } = "";
     public string Description { get; set; } = "";
 
-    /// <summary>False for the two batch-intermediate copybooks, which ship without seed data.</summary>
+    /// <summary>
+    /// True for every sample currently bundled. Kept as an explicit flag rather
+    /// than assumed: a copybook can legitimately ship without data, and callers
+    /// should branch on this rather than on an empty string.
+    /// </summary>
     public bool HasSampleData { get; set; }
 }
 
@@ -89,15 +93,19 @@ public static class SampleLibrary
         {
             Id = "amount-owed-rec",
             CopybookResource = "Samples.catalog74.AMOUNT-OWED-REC.cpy",
-            DataResource = null,
-            Description = "Batch-intermediate totals file. Ships without seed data — it is produced mid-job.",
+            DataResource = "Samples.data.AMOUNT-OWED.DAT",
+            Description =
+                "Per-person owed totals, produced mid-batch by CALC-OWED's control-break aggregation. " +
+                "The bundled data is real GnuCOBOL output, not synthesized.",
         },
         new Sample
         {
             Id = "amount-paid-rec",
             CopybookResource = "Samples.catalog74.AMOUNT-PAID-REC.cpy",
-            DataResource = null,
-            Description = "Batch-intermediate totals file. Ships without seed data — it is produced mid-job.",
+            DataResource = "Samples.data.AMOUNT-PAID.DAT",
+            Description =
+                "Per-person paid totals, produced mid-batch by CALC-PAID. The bundled data is real " +
+                "GnuCOBOL output, not synthesized.",
         },
         new Sample
         {
@@ -120,8 +128,9 @@ public static class SampleLibrary
         }).ToList();
 
     /// <summary>
-    /// Looks a sample up by id. <paramref name="sampleDataText"/> is empty for
-    /// samples that ship without seed data — not an error.
+    /// Looks a sample up by id. <paramref name="sampleDataText"/> is empty for a
+    /// sample bundled without data — not an error. Every sample currently
+    /// bundled has data.
     /// </summary>
     public static bool TryGet(string id, out string copybookSource, out string sampleDataText)
     {

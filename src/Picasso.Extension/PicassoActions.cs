@@ -150,10 +150,10 @@ public sealed class PicassoActions
     // ---- Action 4: GetSampleCopybook ----
 
     /// <summary>
-    /// Loads a bundled copybook and its seed data by id.
-    /// <paramref name="sampleDataText"/> comes back empty for the two
-    /// batch-intermediate copybooks that ship without data — that is not a
-    /// failure, and the action still returns true.
+    /// Loads a bundled copybook and its data by id. Every sample currently
+    /// bundled has data; if one ever ships without,
+    /// <paramref name="sampleDataText"/> comes back empty and the action still
+    /// returns true — absent data is not a failure.
     /// </summary>
     public bool GetSampleCopybook(
         string sampleId,

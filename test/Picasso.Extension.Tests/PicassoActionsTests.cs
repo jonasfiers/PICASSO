@@ -13,11 +13,12 @@ public class PicassoActionsTests
 {
     private readonly PicassoActions _actions = new();
 
-    /// <summary>The bundled samples that ship with seed data attached.</summary>
+    /// <summary>Every bundled sample — all ten now ship with data attached.</summary>
     public static TheoryData<string> SamplesWithData => new()
     {
         "user-rec", "user-auth-rec", "group-rec", "member-rec",
         "expense-rec", "share-rec", "balance-rec", "portrait-rec",
+        "amount-owed-rec", "amount-paid-rec",
     };
 
     // ---- The end-to-end contract ----
@@ -220,15 +221,34 @@ public class PicassoActionsTests
     }
 
     [Theory]
-    [InlineData("amount-owed-rec")]
-    [InlineData("amount-paid-rec")]
-    public void BatchIntermediateSamplesSucceedWithEmptyData(string sampleId)
+    [InlineData("amount-owed-rec", 21)]
+    [InlineData("amount-paid-rec", 21)]
+    public void BatchIntermediateSamplesCarryRealCobolOutput(string sampleId, int expectedWidth)
     {
-        // No seed data is a fact about the sample, not a failure.
+        // These two have no seed data — the bundled files are what CATALOG-74's
+        // own CALC-OWED/CALC-PAID actually wrote when compiled with GnuCOBOL and
+        // run. Decoding them proves the derived layout against a real COBOL
+        // runtime rather than against our own encoder.
         Assert.True(_actions.GetSampleCopybook(sampleId, out var copybook, out var data, out var error), error);
-        Assert.NotEmpty(copybook);
-        Assert.Equal("", data);
-        Assert.Equal("", error);
+        Assert.NotEmpty(data);
+        Assert.True(_actions.ParseCopybook(copybook, out var specJson, out _, out error), error);
+
+        var width = JsonDocument.Parse(specJson).RootElement
+            .EnumerateArray().Sum(f => f.GetProperty("Len").GetInt32());
+        Assert.Equal(expectedWidth, width);
+
+        Assert.True(_actions.DecodeRecords(specJson, data, out var recordsJson, out error), error);
+        Assert.True(_actions.EncodeRecords(specJson, recordsJson, out var reencoded, out error), error);
+        Assert.Equal(data, reencoded);
+    }
+
+    [Fact]
+    public void EveryBundledSampleNowShipsWithData()
+    {
+        var rows = JsonDocument.Parse(_actions.ListSampleIds()).RootElement.EnumerateArray().ToList();
+        Assert.All(rows, r => Assert.True(
+            r.GetProperty("hasSampleData").GetBoolean(),
+            $"{r.GetProperty("id").GetString()} reports no sample data"));
     }
 
     [Fact]
@@ -256,7 +276,7 @@ public class PicassoActionsTests
 
         Assert.Contains(names, n => n.EndsWith("Samples.PORTRAIT-REC.cpy", StringComparison.Ordinal));
         Assert.Contains(names, n => n.EndsWith("Samples.data.PORTRAIT-SAMPLE.DAT", StringComparison.Ordinal));
-        Assert.Equal(18, names.Length); // 10 copybooks + 8 data files
+        Assert.Equal(20, names.Length); // 10 copybooks + 10 data files
         Assert.DoesNotContain(names, n => n.EndsWith("specs.js", StringComparison.Ordinal));
     }
 }

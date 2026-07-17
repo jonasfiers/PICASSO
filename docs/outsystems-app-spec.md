@@ -100,7 +100,7 @@ Leave the input editable. Watching a hand-typed `PIC` clause change the derived 
 3. `CopybookSource = CopybookSource` (out), `FixedWidthText = SampleDataText` (out).
 4. Call `DoParse`.
 
-`SampleDataText` is empty for `amount-owed-rec` / `amount-paid-rec` — expected, not an error. The Run button should disable when `FixedWidthText` is empty.
+All ten bundled samples come with data attached, so this normally populates. Absent data is not an error, though — disable the Run button on `FixedWidthText = ""` rather than treating it as a failure.
 
 #### Action: `DoParse`
 

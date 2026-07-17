@@ -82,7 +82,7 @@ All parameters are **Text** unless noted.
 | `SampleDataText` | Output | Text |
 | `ErrorMessage` | Output | Text |
 
-`SampleDataText` comes back empty for `amount-owed-rec` and `amount-paid-rec` — they're batch intermediates that ship without seed data. That's not a failure; `Success` is still True.
+All ten bundled samples come with data attached. If a sample ever ships without, `SampleDataText` comes back empty and `Success` is still True — absent data is not a failure. Branch on `HasSampleData` from `ListSampleIds` rather than on an empty string.
 
 ### `ListSampleIds`
 
