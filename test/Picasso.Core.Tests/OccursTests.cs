@@ -270,4 +270,19 @@ public class OccursTests
     {
         Assert.Throws<FormatException>(() => CopybookParser.Parse("01  R.\n    05  SLOT PIC X(2) OCCURS TIMES.\n"));
     }
+
+    [Fact]
+    public void PathologicallyLargeOccursCountFailsLoudlyRatherThanOverflowing()
+    {
+        // 200,000,000 copies of a 20-byte group overflows a 32-bit byte length
+        // (4,000,000,000 > int.MaxValue). Unchecked multiplication would wrap to
+        // a wrong (likely negative) Len silently -- exactly the "silently wrong
+        // offsets" failure mode this project fails loudly on everywhere else.
+        // No real copybook needs a count this large; this is a guard against
+        // pathological input, not a realistic file.
+        var ex = Assert.Throws<OverflowException>(() => CopybookParser.Parse(
+            "01  R.\n    05  BIG-GROUP OCCURS 200000000.\n        10  A PIC X(20).\n"));
+        Assert.Contains("BIG-GROUP", ex.Message);
+        Assert.Contains("overflows", ex.Message);
+    }
 }

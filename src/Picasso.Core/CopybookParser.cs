@@ -442,7 +442,18 @@ public static class CopybookParser
         }
 
         node.Start = startOffset;
-        node.Len = oneIterationLen * node.OccursCount;
+        try
+        {
+            node.Len = checked(oneIterationLen * node.OccursCount);
+        }
+        catch (OverflowException)
+        {
+            throw new OverflowException(
+                $"OCCURS item '{node.Name}' has {node.OccursCount} copies of a {oneIterationLen}-byte " +
+                $"iteration, which overflows a 32-bit byte length ({(long)oneIterationLen * node.OccursCount} " +
+                "bytes total). No real copybook needs a repeat count this large — failing loudly here beats " +
+                "silently wrapping to a negative or wrong length.");
+        }
         return startOffset + node.Len;
     }
 
