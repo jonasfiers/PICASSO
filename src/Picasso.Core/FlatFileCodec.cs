@@ -158,6 +158,19 @@ public static class FlatFileCodec
                 digitsText = raw.Substring(0, raw.Length - 1);
             }
         }
+        else if (field.Signed)
+        {
+            // Overpunched sign: the sign lives in the zone nibble of one digit —
+            // the trailing digit by default, the leading digit under SIGN IS
+            // LEADING. Recover the plain digit and the sign, then substitute the
+            // plain digit back so the magnitude parses. See Overpunch.cs.
+            var signIndex = field.SignLeading ? 0 : raw.Length - 1;
+            var (digit, isNegative) = Overpunch.Decode(raw[signIndex]);
+            negative = isNegative;
+            var chars = raw.ToCharArray();
+            chars[signIndex] = digit;
+            digitsText = new string(chars);
+        }
         else
         {
             digitsText = raw;
@@ -207,7 +220,21 @@ public static class FlatFileCodec
         digitsText = digitsText.PadLeft(field.Digits, '0');
 
         if (!field.SignSeparate)
-            return digitsText;
+        {
+            if (!field.Signed)
+                return digitsText;
+
+            // Overpunched sign: fold the sign into the zone nibble of the trailing
+            // digit (default) or leading digit (SIGN IS LEADING), adding no byte.
+            // Always the PREFERRED representation (zone C positive, zone D
+            // negative). A source that stored a positive value in the alternate
+            // zone-F form (plain '0'-'9') decodes correctly but re-encodes to the
+            // zone-C letter here — same value, different byte. See Overpunch.cs.
+            var signIndex = field.SignLeading ? 0 : digitsText.Length - 1;
+            var chars = digitsText.ToCharArray();
+            chars[signIndex] = Overpunch.Encode(chars[signIndex], negative);
+            return new string(chars);
+        }
 
         var signChar = negative ? '-' : '+';
         return field.SignLeading ? signChar + digitsText : digitsText + signChar;
