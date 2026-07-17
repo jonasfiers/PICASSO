@@ -170,8 +170,21 @@ public static class CopybookParser
 
             if (c == '.')
             {
-                Flush();
-                continue;
+                // A COBOL statement-terminating period is always followed by
+                // whitespace, a newline, or end of input. A period embedded in a
+                // PIC (the decimal point of an edited picture, e.g. ZZ,ZZ9.99) or
+                // inside a numeric literal (VALUE 1.5) is followed by a non-space
+                // and is data, not a terminator — splitting on it would shatter the
+                // statement (ZZ,ZZ9.99 -> "ZZ,ZZ9" + "99"). Only a period at a
+                // token boundary terminates.
+                var next = i + 1 < text.Length ? text[i + 1] : '\0';
+                if (next == '\0' || char.IsWhiteSpace(next))
+                {
+                    Flush();
+                    continue;
+                }
+                // Embedded period: keep it in the current statement (falls through
+                // to the append below).
             }
 
             current.Append(c);

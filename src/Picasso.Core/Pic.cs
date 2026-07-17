@@ -15,10 +15,11 @@ public static class Pic
     /// Single-character picture symbols this parser recognizes. Anything
     /// outside this set (and the two-character CR/DB tokens handled separately)
     /// is a genuinely-unknown character and is rejected loudly — never guessed
-    /// at a width. <c>S</c> is here too, though a leading sign S is stripped
-    /// before tokenizing; it is width-0 wherever it appears.
+    /// at a width. <c>S</c> is deliberately NOT here: it is legal only as the
+    /// leftmost picture character, so a leading S is stripped before tokenizing
+    /// and any other S is a genuinely-invalid character that must reject.
     /// </summary>
-    private const string KnownSymbols = "9XAVSZ*.,/B0+-$P";
+    private const string KnownSymbols = "9XAVZ*.,/B0+-$P";
 
     /// <summary>
     /// Edit symbols — the presence of any one flips a picture to the Edited
@@ -118,7 +119,8 @@ public static class Pic
                     alphaLength += t.Count;
                     break;
                 // No other symbol reaches here: an edited picture returned above,
-                // so the only remaining possibility is a stray S (width 0, ignored).
+                // and a non-leading S is rejected as unrecognized during tokenizing,
+                // so only 9 / X / A / V remain.
             }
         }
 
@@ -216,10 +218,10 @@ public static class Pic
 
     /// <summary>
     /// Display width (character positions = bytes) contributed by ONE occurrence
-    /// of a symbol. V (implied decimal point), P (decimal scaling position), and
-    /// S (sign indicator) occupy no character position; CR/DB occupy two; every
-    /// other symbol occupies one. Multiplied by the token's repeat count by the
-    /// caller.
+    /// of a symbol. V (implied decimal point) and P (decimal scaling position)
+    /// occupy no character position; CR/DB occupy two; every other symbol occupies
+    /// one. (A leading S is stripped before tokenizing and never reaches here.)
+    /// Multiplied by the token's repeat count by the caller.
     /// </summary>
     private static int WidthOf(string symbol)
     {
@@ -230,7 +232,6 @@ public static class Pic
         {
             case 'V':
             case 'P':
-            case 'S':
                 return 0;
             default:
                 // 9 X A Z * . , / B 0 + - $
