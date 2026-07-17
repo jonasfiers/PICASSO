@@ -492,13 +492,19 @@ public class CopybookParserTests
     }
 
     [Fact]
-    public void RejectsSignedDisplayNumericWithoutSeparateSignClause()
+    public void ParsesSignedDisplayNumericWithoutSeparateSignClauseAsOverpunch()
     {
-        // Overpunched sign encoding is out of scope; failing loudly beats
-        // silently mis-sizing the field by one byte.
-        var ex = Assert.Throws<FormatException>(
-            () => CopybookParser.Parse("01  R.\n    05  A PIC S9(5).\n"));
-        Assert.Contains("SIGN IS LEADING/TRAILING SEPARATE", ex.Message);
+        // A signed DISPLAY numeric without SIGN IS ... SEPARATE carries its sign
+        // as an overpunch in the trailing digit's zone nibble — no extra byte, so
+        // the field's width equals its digit count.
+        var spec = CopybookParser.Parse("01  R.\n    05  A PIC S9(5).\n");
+        var a = spec.Flat.Single();
+        Assert.Equal(FieldType.NumericDisplay, a.Type);
+        Assert.True(a.Signed);
+        Assert.False(a.SignSeparate);
+        Assert.False(a.SignLeading);   // trailing is the default
+        Assert.Equal(5, a.Digits);
+        Assert.Equal(5, a.Len);
     }
 
     [Fact]
