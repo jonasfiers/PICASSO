@@ -4,6 +4,8 @@
 
 A COBOL copybook parser packaged as an OutSystems Integration Studio Extension. Point it at a `.cpy` file and it derives the byte layout — offsets, lengths, implied decimals, packed-decimal widths, sign placement — then decodes and encodes the fixed-width files that layout describes.
 
+*The .NET implementation was written by Claude (Anthropic), directed and verified throughout by [Jonas Fiers](https://github.com/jonasfiers) — see [Contributions](#contributions).*
+
 ## Why this exists
 
 The OutSystems Forge has no COBOL connector. Mainframe integrations get hand-rolled, every time, by someone reading `PIC` clauses off a copybook and typing byte offsets into a config file by hand.
@@ -126,6 +128,13 @@ Each returns a Boolean success flag plus an `errorMessage`; no exception crosses
 ## A note on encoding
 
 Every string in the codec is one byte per char (Latin-1), not UTF-8. COMP-3 packs two digits into a byte and the resulting bytes are frequently not valid UTF-8 — read one of these files as UTF-8 and the packed fields are silently destroyed. Callers must read and write with Latin-1.
+
+## Contributions
+
+- **Requirements, direction, and verification** — [Jonas Fiers](https://github.com/jonasfiers). The scope decisions (what's in v1, what's explicitly deferred), the choice to validate against a real mainframe copybook rather than stopping at synthetic test data, and reviewing each change against that real data are his.
+- **Implementation** — written by Claude (Anthropic), under that direction throughout, across two machines: a laptop for the initial engine and parser, a homelab devbox for the rest.
+
+Every commit's authorship is visible in the [git history](https://github.com/jonasfiers/PICASSO/commits/main) — this section exists so it's stated plainly rather than left to infer.
 
 ## License
 
