@@ -523,18 +523,12 @@ public static class CopybookParser
     /// A copy of a leaf field for one OCCURS iteration: same type and sizing, its
     /// absolute start advanced by <paramref name="shift"/> and renamed. The source
     /// field's own Start is iteration 1's absolute offset, so shift == 0 reproduces
-    /// it exactly.
+    /// it exactly. A `with` expression, not a hand-listed copy: every other
+    /// property (including any FieldSpec gains later) carries over automatically.
     /// </summary>
-    private static FieldSpec ShiftField(FieldSpec source, int shift, string name) => new FieldSpec
+    private static FieldSpec ShiftField(FieldSpec source, int shift, string name) => source with
     {
         Name = name,
         Start = source.Start + shift,
-        Len = source.Len,
-        Type = source.Type,
-        Digits = source.Digits,
-        Scale = source.Scale,
-        Signed = source.Signed,
-        SignSeparate = source.SignSeparate,
-        SignLeading = source.SignLeading,
     };
 }
