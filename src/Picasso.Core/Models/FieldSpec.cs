@@ -4,6 +4,7 @@ public enum FieldType
 {
     NumericDisplay,
     Comp3,
+    Binary,
     Text,
 }
 
