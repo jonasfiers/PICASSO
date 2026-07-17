@@ -1,0 +1,289 @@
+using System;
+using System.IO;
+using System.Linq;
+using System.Text;
+using Picasso.Core;
+using Picasso.Core.Models;
+using Xunit;
+
+namespace Picasso.Core.Tests;
+
+public class CopybookParserTests
+{
+    private static ParsedCopybook ParsePortrait() =>
+        CopybookParser.Parse(File.ReadAllText(SamplePaths.Root("PORTRAIT-REC.cpy"), Encoding.Latin1));
+
+    // ---- StripComments ----
+
+    [Fact]
+    public void StripsFreeFormatCommentsToEndOfLine()
+    {
+        var stripped = CopybookParser.StripComments("01  A-REC. *> trailing note\n    05  B PIC X(3).\n");
+        Assert.DoesNotContain("trailing note", stripped);
+        Assert.Contains("01  A-REC.", stripped);
+        Assert.Contains("05  B PIC X(3).", stripped);
+    }
+
+    [Fact]
+    public void StripsFixedFormatColumn7CommentLines()
+    {
+        // Column 7 (0-indexed 6) is '*', and not the start of a '*>' —
+        // the whole line is a traditional fixed-format comment.
+        var stripped = CopybookParser.StripComments("      * legacy comment line\n       01  A-REC.\n");
+        Assert.DoesNotContain("legacy comment", stripped);
+        Assert.Contains("01  A-REC.", stripped);
+    }
+
+    [Fact]
+    public void RealCopybookCommentBannerIsStrippedEntirely()
+    {
+        // The vendored copybooks lead with a '      *>' banner: column 7 is
+        // '*' but it is a free-format '*>' marker, so it must strip via the
+        // '*>' path rather than the column-7 path. Same result either way.
+        var stripped = CopybookParser.StripComments(
+            File.ReadAllText(SamplePaths.Catalog74("BALANCE-REC.cpy"), Encoding.Latin1));
+        Assert.DoesNotContain("derived output", stripped);
+        Assert.Contains("BALANCE-REC", stripped);
+    }
+
+    // ---- SplitStatements ----
+
+    [Fact]
+    public void SplitsOnPeriodsAndCollapsesWhitespace()
+    {
+        var statements = CopybookParser.SplitStatements("01  A-REC.\n    05  B    PIC   X(3).\n");
+        Assert.Equal(new[] { "01 A-REC", "05 B PIC X(3)" }, statements);
+    }
+
+    [Fact]
+    public void IgnoresTrailingWhitespaceOnlyChunks()
+    {
+        Assert.Equal(new[] { "01 A-REC" }, CopybookParser.SplitStatements("01  A-REC.\n\n   \n"));
+    }
+
+    // ---- BuildTree ----
+
+    [Fact]
+    public void BuildsThreeLevelTree()
+    {
+        var root = ParsePortrait().Root;
+
+        Assert.Equal("PORTRAIT-REC", root.Name);
+        Assert.Equal(1, root.LevelNumber);
+        Assert.True(root.IsGroup);
+
+        Assert.Equal(
+            new[] { "ARTIST-ID", "ARTIST-NAME", "STUDIO-ADDRESS", "CANVAS-COUNT", "TOTAL-VALUE", "NET-WORTH" },
+            root.Children.Select(c => c.Name));
+
+        var address = root.Children.Single(c => c.Name == "STUDIO-ADDRESS");
+        Assert.True(address.IsGroup);
+        Assert.Equal(5, address.LevelNumber);
+        Assert.Equal(new[] { "STREET", "CITY", "POSTAL-CODE" }, address.Children.Select(c => c.Name));
+        Assert.All(address.Children, c => Assert.Equal(10, c.LevelNumber));
+    }
+
+    [Fact]
+    public void SiblingsAtSameLevelAttachToTheSameParent()
+    {
+        // A 10-level following a nested 10-level group must pop back to the
+        // group, not chain ever-deeper.
+        var root = CopybookParser.BuildTree(CopybookParser.SplitStatements(@"
+            01  R.
+                05  G.
+                    10  A PIC X(1).
+                    10  B PIC X(1).
+                05  C PIC X(1).
+        "))!;
+
+        Assert.Equal(new[] { "G", "C" }, root.Children.Select(c => c.Name));
+        Assert.Equal(new[] { "A", "B" }, root.Children[0].Children.Select(c => c.Name));
+    }
+
+    [Fact]
+    public void PicBearingEntriesAreLeaves()
+    {
+        var root = ParsePortrait().Root;
+        var artistId = root.Children.Single(c => c.Name == "ARTIST-ID");
+        Assert.False(artistId.IsGroup);
+        Assert.NotNull(artistId.Field);
+        Assert.Empty(artistId.Children);
+    }
+
+    // ---- ComputeOffsets ----
+
+    [Fact]
+    public void ComputesLeafOffsetsDepthFirst()
+    {
+        var flat = ParsePortrait().Flat;
+
+        Assert.Equal(
+            new[]
+            {
+                ("ARTIST-ID", 0, 6),
+                ("ARTIST-NAME", 6, 30),
+                ("STREET", 36, 25),
+                ("CITY", 61, 20),
+                ("POSTAL-CODE", 81, 10),
+                ("CANVAS-COUNT", 91, 4),
+                ("TOTAL-VALUE", 95, 6),
+                ("NET-WORTH", 101, 12),
+            },
+            flat.Select(f => (f.Name, f.Start, f.Len)));
+    }
+
+    [Fact]
+    public void GroupRollsUpChildSizes()
+    {
+        var root = ParsePortrait().Root;
+        var address = root.Children.Single(c => c.Name == "STUDIO-ADDRESS");
+
+        Assert.Equal(36, address.Start);
+        Assert.Equal(25 + 20 + 10, address.Len);
+
+        // The 01 level rolls up the whole record.
+        Assert.Equal(0, root.Start);
+        Assert.Equal(113, root.Len);
+        Assert.Equal(root.Len, ParsePortrait().Flat.Sum(f => f.Len));
+    }
+
+    [Fact]
+    public void FieldStartMatchesOwningNodeStart()
+    {
+        var root = ParsePortrait().Root;
+        var netWorth = root.Children.Single(c => c.Name == "NET-WORTH");
+        Assert.Equal(netWorth.Start, netWorth.Field!.Start);
+    }
+
+    // ---- Flatten ----
+
+    [Fact]
+    public void FlattenReturnsLeavesOnlyInByteOrder()
+    {
+        var flat = ParsePortrait().Flat;
+        Assert.DoesNotContain(flat, f => f.Name == "STUDIO-ADDRESS");
+        Assert.DoesNotContain(flat, f => f.Name == "PORTRAIT-REC");
+        Assert.Equal(8, flat.Count);
+        Assert.Equal(flat.OrderBy(f => f.Start).Select(f => f.Name), flat.Select(f => f.Name));
+    }
+
+    // ---- Field sizing ----
+
+    [Fact]
+    public void Comp3FieldUsesPackedByteLengthNotDigitCount()
+    {
+        var totalValue = ParsePortrait().Flat.Single(f => f.Name == "TOTAL-VALUE");
+        Assert.Equal(FieldType.Comp3, totalValue.Type);
+        Assert.Equal(11, totalValue.Digits);
+        Assert.Equal(2, totalValue.Scale);
+        Assert.True(totalValue.Signed);
+        Assert.Equal(6, totalValue.Len); // ceil((11+1)/2), not 11
+    }
+
+    [Fact]
+    public void SignLeadingSeparateReservesOneExtraByteWithinTheSameField()
+    {
+        var netWorth = ParsePortrait().Flat.Single(f => f.Name == "NET-WORTH");
+        Assert.Equal(FieldType.NumericDisplay, netWorth.Type);
+        Assert.Equal(11, netWorth.Digits);
+        Assert.True(netWorth.Signed);
+        Assert.True(netWorth.SignSeparate);
+        Assert.True(netWorth.SignLeading);
+        Assert.Equal(12, netWorth.Len); // 11 digits + 1 sign byte, one field
+    }
+
+    [Fact]
+    public void SignTrailingSeparateIsDistinguishedFromLeading()
+    {
+        var parsed = CopybookParser.Parse(
+            File.ReadAllText(SamplePaths.Catalog74("BALANCE-REC.cpy"), Encoding.Latin1));
+        var netBalance = parsed.Flat.Single(f => f.Name == "NET-BALANCE");
+
+        Assert.True(netBalance.SignSeparate);
+        Assert.False(netBalance.SignLeading);
+        Assert.Equal(10, netBalance.Len); // 9 digits + 1 trailing sign byte
+    }
+
+    [Fact]
+    public void UnsignedDisplayNumericHasNoSignByte()
+    {
+        var canvasCount = ParsePortrait().Flat.Single(f => f.Name == "CANVAS-COUNT");
+        Assert.False(canvasCount.Signed);
+        Assert.False(canvasCount.SignSeparate);
+        Assert.Equal(4, canvasCount.Len);
+    }
+
+    // ---- Rejections ----
+
+    [Theory]
+    [InlineData(66, "RENAMES")]
+    [InlineData(88, "condition-name")]
+    public void RejectsUnsupportedLevelNumbers(int level, string expectedInMessage)
+    {
+        var source = $"01  R.\n    05  A PIC X(3).\n    {level}  B-COND VALUE 'X'.\n";
+        var ex = Assert.Throws<FormatException>(() => CopybookParser.Parse(source));
+        Assert.Contains(expectedInMessage, ex.Message);
+        Assert.Contains(level.ToString(), ex.Message);
+    }
+
+    [Fact]
+    public void RejectsMultipleTopLevelRecords()
+    {
+        var source = "01  FIRST-REC.\n    05  A PIC X(3).\n01  SECOND-REC.\n    05  B PIC X(3).\n";
+        var ex = Assert.Throws<FormatException>(() => CopybookParser.Parse(source));
+        Assert.Contains("FIRST-REC", ex.Message);
+        Assert.Contains("SECOND-REC", ex.Message);
+    }
+
+    [Fact]
+    public void RejectsSignedDisplayNumericWithoutSeparateSignClause()
+    {
+        // Overpunched sign encoding is out of scope; failing loudly beats
+        // silently mis-sizing the field by one byte.
+        var ex = Assert.Throws<FormatException>(
+            () => CopybookParser.Parse("01  R.\n    05  A PIC S9(5).\n"));
+        Assert.Contains("SIGN IS LEADING/TRAILING SEPARATE", ex.Message);
+    }
+
+    [Fact]
+    public void RejectsComp3OnAlphanumericPicture()
+    {
+        Assert.Throws<FormatException>(
+            () => CopybookParser.Parse("01  R.\n    05  A PIC X(5) COMP-3.\n"));
+    }
+
+    [Fact]
+    public void RejectsEmptySource()
+    {
+        Assert.Throws<FormatException>(() => CopybookParser.Parse("      *> only a comment\n"));
+    }
+
+    // ---- Corpus smoke test ----
+
+    [Theory]
+    [InlineData("AMOUNT-OWED-REC.cpy")]
+    [InlineData("AMOUNT-PAID-REC.cpy")]
+    [InlineData("BALANCE-REC.cpy")]
+    [InlineData("EXPENSE-REC.cpy")]
+    [InlineData("GROUP-REC.cpy")]
+    [InlineData("MEMBER-REC.cpy")]
+    [InlineData("SHARE-REC.cpy")]
+    [InlineData("USER-AUTH-REC.cpy")]
+    [InlineData("USER-REC.cpy")]
+    public void EveryVendoredCopybookParsesToAContiguousLayout(string fileName)
+    {
+        var parsed = CopybookParser.Parse(File.ReadAllText(SamplePaths.Catalog74(fileName), Encoding.Latin1));
+
+        Assert.NotEmpty(parsed.Flat);
+
+        // Fields must tile the record with no gaps and no overlaps.
+        var cursor = 0;
+        foreach (var field in parsed.Flat)
+        {
+            Assert.Equal(cursor, field.Start);
+            Assert.True(field.Len > 0, $"Field '{field.Name}' has non-positive length.");
+            cursor += field.Len;
+        }
+        Assert.Equal(parsed.Root.Len, cursor);
+    }
+}
