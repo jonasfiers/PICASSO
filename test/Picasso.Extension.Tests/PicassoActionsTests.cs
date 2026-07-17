@@ -224,6 +224,20 @@ public class PicassoActionsTests
     }
 
     [Fact]
+    public void ParseCopybookRejectsVariableLengthOdoCopybooks()
+    {
+        // The engine supports OCCURS ... DEPENDING ON, but the JSON flat-spec
+        // action surface is static and cannot carry a per-record variable layout.
+        // ParseCopybook must fail loudly (not emit a silently-wrong static spec).
+        var copybook =
+            "01 R.\n 05 CNT PIC 9(2).\n 05 TAB PIC X(3) OCCURS 1 TO 5 DEPENDING ON CNT.\n";
+
+        Assert.False(_actions.ParseCopybook(copybook, out var specJson, out _, out var error));
+        Assert.Equal("", specJson);
+        Assert.Contains("DEPENDING ON", error);
+    }
+
+    [Fact]
     public void ParseCopybookEmitsTheDocumentedStructurePreviewShape()
     {
         Assert.True(_actions.GetSampleCopybook("portrait-rec", out var copybook, out _, out var error), error);
