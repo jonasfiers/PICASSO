@@ -269,8 +269,10 @@ public static class CopybookParser
                 case "COMPUTATIONAL-5":
                     throw UnsupportedUsage("COMP-5", "native binary", name, statement);
                 case "COMP-6":
+                case "COMPUTATIONAL-6":
                     throw UnsupportedUsage("COMP-6", "unsigned packed decimal", name, statement);
                 case "COMP-X":
+                case "COMPUTATIONAL-X":
                     throw UnsupportedUsage("COMP-X", "binary", name, statement);
                 case "BINARY":
                     throw UnsupportedUsage("BINARY", "binary", name, statement);
@@ -280,15 +282,33 @@ public static class CopybookParser
                     throw UnsupportedUsage("INDEX", "index", name, statement);
                 case "POINTER":
                     throw UnsupportedUsage("POINTER", "pointer", name, statement);
+                case "POINTER-32":
+                    throw UnsupportedUsage("POINTER-32", "32-bit pointer", name, statement);
+                case "POINTER-64":
+                    throw UnsupportedUsage("POINTER-64", "64-bit pointer", name, statement);
                 case "PROCEDURE-POINTER":
                     throw UnsupportedUsage("PROCEDURE-POINTER", "procedure pointer", name, statement);
                 case "FUNCTION-POINTER":
                     throw UnsupportedUsage("FUNCTION-POINTER", "function pointer", name, statement);
+                // OBJECT in clause position is the OBJECT REFERENCE usage (two
+                // tokens; REFERENCE falls through the default skip and never
+                // matters). Like COMP-1/COMP-2 it carries no PIC, so skipping it
+                // used to drop the field entirely and shift every following offset.
+                case "OBJECT":
+                    throw UnsupportedUsage("OBJECT REFERENCE", "object reference", name, statement);
                 case "SYNC":
                 case "SYNCHRONIZED":
                     throw UnsupportedUsage("SYNC", "synchronized/aligned", name, statement);
                 case "NATIONAL":
                     throw UnsupportedUsage("NATIONAL", "national (double-byte)", name, statement);
+                // DBCS (DISPLAY-1) and UTF-8 give a character a physical width other
+                // than one byte (2 bytes DBCS; 1-4 bytes UTF-8) — DISPLAY sizing
+                // would undercount. Note plain DISPLAY stays supported: it is not a
+                // token here, it falls through the default skip like VALUE/JUSTIFIED.
+                case "DISPLAY-1":
+                    throw UnsupportedUsage("DISPLAY-1", "DBCS (double-byte)", name, statement);
+                case "UTF-8":
+                    throw UnsupportedUsage("UTF-8", "UTF-8", name, statement);
 
                 default:
                     // Unrecognized clause (e.g. VALUE, JUSTIFIED) — skip

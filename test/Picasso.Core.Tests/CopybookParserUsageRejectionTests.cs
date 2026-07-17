@@ -31,16 +31,22 @@ public class CopybookParserUsageRejectionTests
     [InlineData("COMP-5", "COMP-5")]
     [InlineData("COMPUTATIONAL-5", "COMP-5")]
     [InlineData("COMP-6", "COMP-6")]
+    [InlineData("COMPUTATIONAL-6", "COMP-6")]
     [InlineData("COMP-X", "COMP-X")]
+    [InlineData("COMPUTATIONAL-X", "COMP-X")]
     [InlineData("BINARY", "BINARY")]
     [InlineData("PACKED-DECIMAL", "PACKED-DECIMAL")]
     [InlineData("INDEX", "INDEX")]
     [InlineData("POINTER", "POINTER")]
+    [InlineData("POINTER-32", "POINTER-32")]
+    [InlineData("POINTER-64", "POINTER-64")]
     [InlineData("PROCEDURE-POINTER", "PROCEDURE-POINTER")]
     [InlineData("FUNCTION-POINTER", "FUNCTION-POINTER")]
     [InlineData("SYNC", "SYNC")]
     [InlineData("SYNCHRONIZED", "SYNC")]
     [InlineData("NATIONAL", "NATIONAL")]
+    [InlineData("DISPLAY-1", "DISPLAY-1")]
+    [InlineData("UTF-8", "UTF-8")]
     public void RejectsUnsupportedUsageClause(string usageToken, string expectedInMessage)
     {
         // A single field carrying the usage. INDEX/POINTER/COMP-1/COMP-2 legitimately
@@ -96,6 +102,43 @@ public class CopybookParserUsageRejectionTests
         var ex = Assert.Throws<FormatException>(
             () => CopybookParser.Parse("01  R.\n    05  A PIC 9(5) PACKED-DECIMAL.\n"));
         Assert.Contains("PACKED-DECIMAL", ex.Message);
+    }
+
+    [Fact]
+    public void RejectsObjectReferenceInsteadOfDroppingIt()
+    {
+        // OBJECT REFERENCE is two tokens and carries no PIC. Rejecting on the
+        // OBJECT token means REFERENCE never matters; without it the field would
+        // vanish (no FieldSpec) and slide B to offset 0.
+        var ex = Assert.Throws<FormatException>(
+            () => CopybookParser.Parse("01  R.\n    05  A OBJECT REFERENCE.\n    05  B PIC X(3).\n"));
+        Assert.Contains("OBJECT REFERENCE", ex.Message);
+        Assert.Contains("'A'", ex.Message);
+    }
+
+    [Fact]
+    public void RejectsDisplay1DbcsUsage()
+    {
+        // DBCS: a DISPLAY-1 char is 2 bytes, so PIC X(4) DISPLAY-1 is 8 bytes, not
+        // the 4 that plain DISPLAY sizing would give.
+        var ex = Assert.Throws<FormatException>(
+            () => CopybookParser.Parse("01  R.\n    05  A PIC X(4) DISPLAY-1.\n"));
+        Assert.Contains("DISPLAY-1", ex.Message);
+        Assert.Contains("'A'", ex.Message);
+    }
+
+    [Theory]
+    [InlineData("05  A PIC X(4) DISPLAY.\n")]
+    [InlineData("05  A PIC X(4) USAGE DISPLAY.\n")]
+    [InlineData("05  A PIC X(4) USAGE IS DISPLAY.\n")]
+    public void PlainDisplayUsageStaysSupported(string entry)
+    {
+        // Guard the DISPLAY-1 / DISPLAY boundary: plain DISPLAY is not a rejected
+        // token — it falls through the default skip like VALUE/JUSTIFIED — so a
+        // field explicitly declared USAGE DISPLAY must still parse to 4 bytes.
+        var parsed = CopybookParser.Parse("01  R.\n    " + entry);
+        Assert.Single(parsed.Flat);
+        Assert.Equal(4, parsed.Flat[0].Len);
     }
 
     [Fact]
