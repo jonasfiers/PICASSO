@@ -135,6 +135,19 @@ public static class CopybookParser
     {
         RejectNestedOccurs(root, insideOccurs: false);
 
+        // Locate the (at most one) OCCURS ... DEPENDING ON table and validate its
+        // structural preconditions before any offset is computed. More than one,
+        // an ODO nested in another OCCURS, or an OCCURS nested inside the ODO's
+        // own subtree are each rejected loudly — the common single-ODO case is
+        // the only variable-length shape supported.
+        var odoNode = ValidateAndFindOdo(root);
+
+        // For an ODO copybook the ODO table is expanded to its MINIMUM count for
+        // the representative static layout below; the authoritative per-record
+        // layout is rebuilt at decode time by BuildConcreteLayout.
+        if (odoNode != null)
+            odoNode.OccursCount = odoNode.OdoMin;
+
         ComputeOffsets(root, 0);
 
         var flat = new List<FieldSpec>();
@@ -150,7 +163,158 @@ public static class CopybookParser
                 $"Record '{root.Name}' defines no elementary fields with storage — it would be zero bytes. " +
                 "A layout needs at least one PIC field.");
 
-        return new ParsedCopybook(root, flat, rootIsSynthetic);
+        OdoInfo? odo = null;
+        if (odoNode != null)
+            odo = BuildOdoInfo(odoNode, flat);
+
+        return new ParsedCopybook(root, flat, rootIsSynthetic, odo);
+    }
+
+    /// <summary>
+    /// Finds the single OCCURS ... DEPENDING ON table in the tree and enforces
+    /// the "common case only" scope, loudly. Returns null for an ordinary fixed
+    /// copybook. Rejects: two-or-more ODO tables; an ODO table nested inside
+    /// another OCCURS (fixed or ODO); and any OCCURS (fixed or ODO) nested inside
+    /// the ODO table's own subtree — each a shape PICASSO does not model.
+    /// </summary>
+    private static CopybookNode? ValidateAndFindOdo(CopybookNode root)
+    {
+        var odoNodes = new List<CopybookNode>();
+        CollectOdo(root, odoNodes);
+
+        if (odoNodes.Count == 0)
+            return null;
+
+        if (odoNodes.Count > 1)
+            throw new FormatException(
+                $"More than one OCCURS ... DEPENDING ON table in this record ('{odoNodes[0].Name}' and " +
+                $"'{odoNodes[1].Name}'). Only a single variable-length table per record is supported — two " +
+                "would make the record's shape depend on two counts at once, which this codec does not model.");
+
+        var odo = odoNodes[0];
+
+        // The ODO table must not sit inside any other OCCURS (fixed or ODO): its
+        // offset would itself be data- or index-dependent, which the single,
+        // read-once count model cannot express.
+        if (IsNestedUnderOccurs(root, odo, insideOccurs: false))
+            throw new FormatException(
+                $"OCCURS ... DEPENDING ON table '{odo.Name}' is nested inside another OCCURS. A variable-length " +
+                "table nested in a repeating group is not supported; only a single top-level ODO table is.");
+
+        // No OCCURS of any kind may appear inside the ODO table's subtree — a
+        // table-of-tables where the outer table is variable is out of scope and
+        // rejected rather than half-modelled.
+        foreach (var child in odo.Children)
+            RejectAnyOccursInSubtree(child, odo.Name);
+
+        return odo;
+    }
+
+    private static void CollectOdo(CopybookNode node, List<CopybookNode> into)
+    {
+        if (node.IsOdoTable)
+            into.Add(node);
+        foreach (var child in node.Children)
+            CollectOdo(child, into);
+    }
+
+    /// <summary>True when <paramref name="target"/> has an OCCURS/ODO ancestor.</summary>
+    private static bool IsNestedUnderOccurs(CopybookNode node, CopybookNode target, bool insideOccurs)
+    {
+        if (ReferenceEquals(node, target))
+            return insideOccurs;
+
+        var nowInside = insideOccurs || node.OccursCount > 1 || node.IsOdoTable;
+        foreach (var child in node.Children)
+            if (IsNestedUnderOccurs(child, target, nowInside))
+                return true;
+        return false;
+    }
+
+    private static void RejectAnyOccursInSubtree(CopybookNode node, string odoName)
+    {
+        if (node.OccursCount > 1 || node.IsOdoTable)
+            throw new FormatException(
+                $"OCCURS on field '{node.Name}' sits inside the variable-length table '{odoName}'. An OCCURS " +
+                "nested within an OCCURS ... DEPENDING ON table is not supported — only a flat repeating item " +
+                "(elementary, or a group of non-repeating fields) may depend on a count.");
+        foreach (var child in node.Children)
+            RejectAnyOccursInSubtree(child, odoName);
+    }
+
+    /// <summary>
+    /// Builds the <see cref="OdoInfo"/> descriptor. The depending field must be
+    /// defined earlier in the record than the table (so its value is readable
+    /// before the variable section begins) — validated here against the
+    /// representative layout, since the table's start offset is fixed regardless
+    /// of the eventual count.
+    /// </summary>
+    private static OdoInfo BuildOdoInfo(CopybookNode odoNode, List<FieldSpec> flat)
+    {
+        var dep = odoNode.OdoDependsOn!;
+        var tableStart = odoNode.Start;
+
+        var prefixMatch = flat.FirstOrDefault(f => f.Name == dep && f.Start < tableStart);
+        if (prefixMatch is null)
+        {
+            var existsAnywhere = flat.Any(f => f.Name == dep);
+            if (existsAnywhere)
+                throw new FormatException(
+                    $"OCCURS ... DEPENDING ON '{dep}' (table '{odoNode.Name}') names a field that is not " +
+                    "defined before the table. The depending field's value must be readable before the " +
+                    "variable-length section begins, so it has to precede the table in the record.");
+
+            throw new FormatException(
+                $"OCCURS ... DEPENDING ON '{dep}' (table '{odoNode.Name}') names a field that does not exist " +
+                "in the record. The depending field must be a plain elementary field defined before the table.");
+        }
+
+        return new OdoInfo(odoNode.Name, dep, odoNode.OdoMin, odoNode.OdoMax, prefixMatch);
+    }
+
+    /// <summary>
+    /// Builds the concrete flat layout for a variable-length copybook at a given
+    /// occurrence count: the ODO table expanded to <paramref name="count"/> copies
+    /// (1-indexed, exactly like fixed OCCURS — TAB(1)…TAB(count)), with every
+    /// trailing field's offset shifted past all the copies. The single source of
+    /// truth for an ODO record's byte layout at decode/encode time.
+    ///
+    /// Reuses the same offset and flatten passes the fixed path uses, by setting
+    /// the ODO node's transient count. Not re-entrant across threads (it mutates
+    /// the shared tree's transient offsets), but every returned FieldSpec is an
+    /// independent copy, so previously-returned layouts are never disturbed.
+    /// </summary>
+    public static List<FieldSpec> BuildConcreteLayout(ParsedCopybook parsed, int count)
+    {
+        if (!parsed.IsVariableLength)
+            throw new InvalidOperationException(
+                "BuildConcreteLayout is only meaningful for a variable-length (ODO) copybook.");
+        if (count < 1)
+            throw new ArgumentOutOfRangeException(nameof(count), count,
+                "Occurrence count must be at least 1.");
+
+        var odoNode = FindOdo(parsed.Root)
+            ?? throw new InvalidOperationException("Variable-length copybook has no ODO node in its tree.");
+
+        odoNode.OccursCount = count;
+        ComputeOffsets(parsed.Root, 0);
+
+        var flat = new List<FieldSpec>();
+        Flatten(parsed.Root, flat);
+        return flat;
+    }
+
+    private static CopybookNode? FindOdo(CopybookNode node)
+    {
+        if (node.IsOdoTable)
+            return node;
+        foreach (var child in node.Children)
+        {
+            var found = FindOdo(child);
+            if (found != null)
+                return found;
+        }
+        return null;
     }
 
     /// <summary>
@@ -361,6 +525,13 @@ public static class CopybookParser
         public FieldSpec? Field;
         public int OccursCount = 1;
         public string? RedefinesTarget;
+
+        // Variable-length OCCURS (ODO). IsOdo marks this statement as the table;
+        // the bounds and the depending-field name are carried onto the node.
+        public bool IsOdo;
+        public int OdoMin;
+        public int OdoMax;
+        public string? OdoDependsOn;
     }
 
     private static ParsedStatement? ParseStatement(string statement)
@@ -397,6 +568,10 @@ public static class CopybookParser
         var signLeading = false;
         var occursCount = 1;
         string? redefinesTarget = null;
+        var isOdo = false;
+        var odoMin = 0;
+        var odoMax = 0;
+        string? odoDependsOn = null;
 
         var i = 2;
         while (i < tokens.Length)
@@ -443,41 +618,86 @@ public static class CopybookParser
 
                 case "OCCURS":
                 {
-                    // Variable-length OCCURS (ODO): "OCCURS m TO n TIMES DEPENDING
-                    // ON f". Rejected up front, distinctly, and never treated as a
-                    // fixed count — there is no single fixed count in that clause
-                    // (m/n are bounds), and its record length becomes data-dependent
-                    // at decode time, which PICASSO's compute-once offset model
-                    // can't express. A DEPENDING or a TO anywhere in the OCCURS
-                    // clause marks the variable form; both keywords occur only here.
-                    for (var j = i + 1; j < tokens.Length; j++)
+                    // Two OCCURS shapes reach here:
+                    //   fixed:    OCCURS n [TIMES]
+                    //   variable: OCCURS [m TO] n [TIMES] DEPENDING ON dep   (ODO)
+                    // The DEPENDING keyword is the discriminator. It (and any TO)
+                    // only ever appears in the variable form, so scanning the
+                    // OCCURS clause for it decides the shape before a count is taken
+                    // — a fixed count is never mistaken for a bound and vice versa.
+                    i += 1; // consume OCCURS
+
+                    if (i >= tokens.Length || !int.TryParse(tokens[i], out var firstCount))
+                        throw new FormatException(
+                            $"OCCURS must be followed by an integer count: field '{name}' in \"{statement}\".");
+                    i += 1;
+
+                    // Optional "TO upper": present only in the variable form.
+                    var hasTo = i < tokens.Length && tokens[i].Equals("TO", StringComparison.OrdinalIgnoreCase);
+                    var upperCount = firstCount;
+                    if (hasTo)
                     {
-                        var t = tokens[j].ToUpperInvariant();
-                        if (t == "DEPENDING" || t == "TO")
+                        i += 1;
+                        if (i >= tokens.Length || !int.TryParse(tokens[i], out upperCount))
                             throw new FormatException(
-                                $"OCCURS ... DEPENDING ON (variable-length / ODO) is not supported: field '{name}' " +
-                                $"in \"{statement}\". Its length is data-dependent at decode time, which this " +
-                                "parser's fixed, compute-once offsets cannot model. Only fixed-count " +
-                                "'OCCURS n [TIMES]' is supported.");
+                                $"OCCURS ... TO must be followed by an integer upper bound: field '{name}' " +
+                                $"in \"{statement}\".");
+                        i += 1;
                     }
 
-                    i += 1; // consume OCCURS
-                    if (i >= tokens.Length || !int.TryParse(tokens[i], out occursCount))
+                    // TIMES is optional in both shapes.
+                    if (i < tokens.Length && tokens[i].Equals("TIMES", StringComparison.OrdinalIgnoreCase))
+                        i += 1;
+
+                    var hasDepending = i < tokens.Length
+                        && tokens[i].Equals("DEPENDING", StringComparison.OrdinalIgnoreCase);
+
+                    if (hasDepending)
+                    {
+                        // Variable-length OCCURS (ODO). Bounds: "m TO n" gives
+                        // min=m, max=n; a bare "n DEPENDING ON dep" (no TO) gives
+                        // max=n with an implied min of 1 (COBOL leaves the minimum
+                        // unstated in that form; 1 is the safe, conventional floor).
+                        odoMin = hasTo ? firstCount : 1;
+                        odoMax = upperCount;
+
+                        i += 1; // consume DEPENDING
+                        if (i < tokens.Length && tokens[i].Equals("ON", StringComparison.OrdinalIgnoreCase))
+                            i += 1; // ON is syntactically optional in some dialects
+                        if (i >= tokens.Length)
+                            throw new FormatException(
+                                $"OCCURS ... DEPENDING ON must name a field: field '{name}' in \"{statement}\".");
+                        odoDependsOn = tokens[i];
+                        i += 1;
+
+                        if (odoMin < 1)
+                            throw new FormatException(
+                                $"OCCURS ... DEPENDING ON lower bound must be at least 1: field '{name}' " +
+                                $"in \"{statement}\".");
+                        if (odoMax < odoMin)
+                            throw new FormatException(
+                                $"OCCURS ... DEPENDING ON upper bound ({odoMax}) is below the lower bound " +
+                                $"({odoMin}): field '{name}' in \"{statement}\".");
+
+                        isOdo = true;
+                        // Leave any trailing INDEXED BY / KEY IS to the default skip,
+                        // one token at a time — a following PIC is still matched by
+                        // its own keyword, exactly as in the fixed-count path.
+                        break;
+                    }
+
+                    // No DEPENDING: this is the fixed-count form. "TO" without
+                    // DEPENDING is not valid COBOL — reject it loudly rather than
+                    // silently taking one of the bounds as a fixed count.
+                    if (hasTo)
                         throw new FormatException(
-                            $"OCCURS must be followed by an integer repeat count: field '{name}' in \"{statement}\".");
+                            $"OCCURS ... TO ... without DEPENDING ON is not a valid OCCURS clause: field " +
+                            $"'{name}' in \"{statement}\". A range bound only has meaning with DEPENDING ON.");
+
+                    occursCount = firstCount;
                     if (occursCount < 1)
                         throw new FormatException(
                             $"OCCURS count must be at least 1: field '{name}' in \"{statement}\".");
-                    i += 1;
-
-                    // TIMES is optional (some dialects write "OCCURS 5", others
-                    // "OCCURS 5 TIMES"); both are accepted. Any INDEXED BY / KEY IS
-                    // sub-clauses that follow fall through to the default skip below,
-                    // one token at a time, exactly like VALUE/JUSTIFIED — a real
-                    // clause after them (PIC, COMP-3) is still matched by its own
-                    // keyword, so nothing load-bearing is swallowed.
-                    if (i < tokens.Length && tokens[i].Equals("TIMES", StringComparison.OrdinalIgnoreCase))
-                        i += 1;
                     break;
                 }
 
@@ -605,6 +825,10 @@ public static class CopybookParser
             Field = field,
             OccursCount = occursCount,
             RedefinesTarget = redefinesTarget,
+            IsOdo = isOdo,
+            OdoMin = odoMin,
+            OdoMax = odoMax,
+            OdoDependsOn = odoDependsOn,
         };
     }
 
@@ -783,6 +1007,10 @@ public static class CopybookParser
                 Field = parsed.Field,
                 OccursCount = parsed.OccursCount,
                 RedefinesTarget = parsed.RedefinesTarget,
+                IsOdoTable = parsed.IsOdo,
+                OdoMin = parsed.OdoMin,
+                OdoMax = parsed.OdoMax,
+                OdoDependsOn = parsed.OdoDependsOn,
             };
 
             while (stack.Count > 0 && stack[stack.Count - 1].LevelNumber >= node.LevelNumber)
@@ -946,7 +1174,10 @@ public static class CopybookParser
 
     public static void Flatten(CopybookNode node, List<FieldSpec> into)
     {
-        if (node.OccursCount > 1)
+        // An ODO table is always expanded with 1-indexed names (TAB(1)…TAB(count))
+        // even at count 1, so the naming convention is identical at every count —
+        // a decode and an encode at the same count therefore agree on field keys.
+        if (node.OccursCount > 1 || node.IsOdoTable)
         {
             // One OCCURS item -> OccursCount indexed copies. COBOL tables are
             // 1-indexed, so copies run (1)..(n). Nested OCCURS is rejected before
@@ -981,7 +1212,10 @@ public static class CopybookParser
         }
         else
         {
-            into.Add(node.Field!);
+            // A copy, not the tree's own FieldSpec: BuildConcreteLayout recomputes
+            // offsets on the shared tree at different counts, and a returned layout
+            // must never be mutated retroactively by a later call.
+            into.Add(node.Field! with { });
         }
     }
 

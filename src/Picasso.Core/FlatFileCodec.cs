@@ -43,10 +43,7 @@ public static class FlatFileCodec
                 throw new FormatException(
                     $"Record is {line.Length} bytes, expected {expectedLength} bytes for this layout.");
 
-            var record = new Dictionary<string, object>();
-            foreach (var field in spec)
-                record[field.Name] = DecodeField(line.Substring(field.Start, field.Len), field, encoding);
-            records.Add(record);
+            records.Add(DecodeRecordFields(spec, line, encoding));
         }
         return records;
     }
@@ -69,17 +66,227 @@ public static class FlatFileCodec
 
         var lines = new List<string>();
         foreach (var record in records)
+            lines.Add(EncodeRecordFields(spec, record, encoding));
+
+        return JoinRecords(lines, format);
+    }
+
+    // ---- Variable-length (OCCURS ... DEPENDING ON / ODO) overloads ----
+    //
+    // A variable-length copybook cannot be decoded/encoded against one static
+    // layout: each record's length is fixed by the runtime value of a depending
+    // field read out of that record. These overloads take the whole
+    // ParsedCopybook so they can see its Odo descriptor and build the concrete
+    // layout per record. A fixed (non-ODO) copybook routes straight through the
+    // existing flat-spec path above — the non-ODO behaviour is byte-for-byte
+    // unchanged.
+
+    /// <summary>
+    /// Decodes fixed-width text against a parsed copybook, handling both fixed
+    /// and variable-length (ODO) layouts. For an ODO copybook each record's
+    /// occurrence count is read from its depending field, validated against the
+    /// OCCURS bounds (out-of-range fails loudly), and the record decoded against
+    /// the layout that count produces.
+    /// </summary>
+    public static List<Dictionary<string, object>> Decode(
+        ParsedCopybook parsed,
+        string text,
+        CharacterEncoding encoding = CharacterEncoding.Latin1,
+        RecordFormat format = RecordFormat.NewlineDelimited)
+    {
+        if (!parsed.IsVariableLength)
+            return Decode(parsed.Flat, text, encoding, format);
+
+        return format == RecordFormat.FixedLength
+            ? DecodeVariableFixedLength(parsed, text, encoding)
+            : DecodeVariableDelimited(parsed, text, encoding);
+    }
+
+    /// <summary>
+    /// Encodes records against a parsed copybook, handling both fixed and
+    /// variable-length (ODO) layouts. For an ODO copybook each record's
+    /// occurrence count is taken from its depending field value, validated
+    /// against the OCCURS bounds, and the record encoded against the layout that
+    /// count produces. A record carrying more table entries than the count admits
+    /// (a TAB(count+1) key) is rejected rather than silently truncated.
+    /// </summary>
+    public static string Encode(
+        ParsedCopybook parsed,
+        IEnumerable<Dictionary<string, object>> records,
+        CharacterEncoding encoding = CharacterEncoding.Latin1,
+        RecordFormat format = RecordFormat.NewlineDelimited)
+    {
+        if (!parsed.IsVariableLength)
+            return Encode(parsed.Flat, records, encoding, format);
+
+        var odo = parsed.Odo!;
+        var lines = new List<string>();
+        foreach (var record in records)
         {
-            var sb = new StringBuilder();
-            foreach (var field in spec)
-            {
-                if (!record.TryGetValue(field.Name, out var value))
-                    throw new FormatException($"Record is missing field '{field.Name}'.");
-                sb.Append(EncodeField(value, field, encoding));
-            }
-            lines.Add(sb.ToString());
+            if (!record.TryGetValue(odo.DependsOn, out var depValue))
+                throw new FormatException(
+                    $"Record is missing the depending field '{odo.DependsOn}', which sets the occurrence " +
+                    $"count for the variable-length table '{odo.TableName}'.");
+
+            var count = ToCount(depValue, odo.DependsOn);
+            ValidateCount(count, odo);
+            RejectOverProvidedEntries(record, odo, count);
+
+            var spec = CopybookParser.BuildConcreteLayout(parsed, count);
+            lines.Add(EncodeRecordFields(spec, record, encoding));
         }
 
+        return JoinRecords(lines, format);
+    }
+
+    private static List<Dictionary<string, object>> DecodeVariableDelimited(
+        ParsedCopybook parsed, string text, CharacterEncoding encoding)
+    {
+        var odo = parsed.Odo!;
+        var records = new List<Dictionary<string, object>>();
+
+        foreach (var line in text.Replace("\r\n", "\n").Split('\n').Where(l => l.Length > 0))
+        {
+            var count = ReadCountFromRecord(line, offset: 0, odo, encoding);
+            ValidateCount(count, odo);
+
+            var spec = CopybookParser.BuildConcreteLayout(parsed, count);
+            var expected = spec.Sum(f => f.Len);
+            if (line.Length != expected)
+                throw new FormatException(
+                    $"Variable-length record with {odo.DependsOn}={count} is {line.Length} bytes, expected " +
+                    $"{expected} bytes for that occurrence count.");
+
+            records.Add(DecodeRecordFields(spec, line, encoding));
+        }
+        return records;
+    }
+
+    private static List<Dictionary<string, object>> DecodeVariableFixedLength(
+        ParsedCopybook parsed, string text, CharacterEncoding encoding)
+    {
+        var odo = parsed.Odo!;
+        var records = new List<Dictionary<string, object>>();
+
+        // Walk the undelimited stream: each record's length is only known once its
+        // depending field has been read, so records are sliced one at a time,
+        // advancing by the length the count implies. A record that would run past
+        // the end of the file, or a partial record left over, fails loudly.
+        var pos = 0;
+        while (pos < text.Length)
+        {
+            var depEnd = pos + odo.DependingField.Start + odo.DependingField.Len;
+            if (depEnd > text.Length)
+                throw new FormatException(
+                    $"Undelimited file ends mid-record: only {text.Length - pos} bytes remain at offset {pos}, " +
+                    $"too few to read the depending field '{odo.DependsOn}'.");
+
+            var count = ReadCountFromRecord(text, pos, odo, encoding);
+            ValidateCount(count, odo);
+
+            var spec = CopybookParser.BuildConcreteLayout(parsed, count);
+            var recordLen = spec.Sum(f => f.Len);
+            if (pos + recordLen > text.Length)
+                throw new FormatException(
+                    $"Undelimited record at offset {pos} with {odo.DependsOn}={count} needs {recordLen} bytes " +
+                    $"but only {text.Length - pos} remain. Either the layout doesn't match this file or a " +
+                    "record is truncated.");
+
+            records.Add(DecodeRecordFields(spec, text.Substring(pos, recordLen), encoding));
+            pos += recordLen;
+        }
+        return records;
+    }
+
+    /// <summary>
+    /// Reads the depending field out of a record slice and returns its value as
+    /// an occurrence count. <paramref name="offset"/> is the record's start in
+    /// <paramref name="text"/>; the depending field's own Start is relative to it.
+    /// </summary>
+    private static int ReadCountFromRecord(string text, int offset, OdoInfo odo, CharacterEncoding encoding)
+    {
+        var dep = odo.DependingField;
+        if (offset + dep.Start + dep.Len > text.Length)
+            throw new FormatException(
+                $"Record starting at offset {offset} is too short to contain its depending field " +
+                $"'{odo.DependsOn}' (needs {dep.Start + dep.Len} bytes, has {text.Length - offset}). " +
+                "The layout does not match this file.");
+
+        var raw = text.Substring(offset + dep.Start, dep.Len);
+        var value = DecodeField(raw, dep, encoding);
+        return ToCount(value, odo.DependsOn);
+    }
+
+    private static int ToCount(object value, string fieldName)
+    {
+        var d = Convert.ToDecimal(value);
+        if (d != Math.Truncate(d))
+            throw new FormatException(
+                $"Depending field '{fieldName}' has a fractional value ({d}); an occurrence count must be a " +
+                "whole number.");
+        return (int)d;
+    }
+
+    private static void ValidateCount(int count, OdoInfo odo)
+    {
+        if (count < odo.Min || count > odo.Max)
+            throw new FormatException(
+                $"Occurrence count {count} from depending field '{odo.DependsOn}' is outside the OCCURS bounds " +
+                $"{odo.Min} TO {odo.Max} for table '{odo.TableName}'. A count outside the declared range means " +
+                "the record cannot be laid out — refusing rather than guessing a length.");
+    }
+
+    /// <summary>
+    /// Rejects a record that carries table entries beyond the occurrence count —
+    /// e.g. a TAB(4) key when the count is 3. The concrete layout at that count
+    /// would silently ignore the extra entry, dropping data; fail loudly instead.
+    /// </summary>
+    private static void RejectOverProvidedEntries(
+        Dictionary<string, object> record, OdoInfo odo, int count)
+    {
+        var open = odo.TableName + "(";
+        foreach (var key in record.Keys)
+        {
+            if (!key.StartsWith(open, StringComparison.Ordinal))
+                continue;
+
+            var close = key.IndexOf(')', open.Length);
+            if (close < 0)
+                continue;
+
+            var indexText = key.Substring(open.Length, close - open.Length);
+            if (int.TryParse(indexText, out var index) && index > count)
+                throw new FormatException(
+                    $"Record has table entry '{key}' but the depending field '{odo.DependsOn}' says only " +
+                    $"{count} occurrence(s). Encoding at that count would silently drop the extra entry — " +
+                    "make the count and the supplied entries agree.");
+        }
+    }
+
+    private static Dictionary<string, object> DecodeRecordFields(
+        IReadOnlyList<FieldSpec> spec, string line, CharacterEncoding encoding)
+    {
+        var record = new Dictionary<string, object>();
+        foreach (var field in spec)
+            record[field.Name] = DecodeField(line.Substring(field.Start, field.Len), field, encoding);
+        return record;
+    }
+
+    private static string EncodeRecordFields(
+        IReadOnlyList<FieldSpec> spec, Dictionary<string, object> record, CharacterEncoding encoding)
+    {
+        var sb = new StringBuilder();
+        foreach (var field in spec)
+        {
+            if (!record.TryGetValue(field.Name, out var value))
+                throw new FormatException($"Record is missing field '{field.Name}'.");
+            sb.Append(EncodeField(value, field, encoding));
+        }
+        return sb.ToString();
+    }
+
+    private static string JoinRecords(List<string> lines, RecordFormat format)
+    {
         if (format == RecordFormat.FixedLength)
             return string.Concat(lines);
 

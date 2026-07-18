@@ -61,6 +61,24 @@ public sealed class PicassoActions
 
             var parsed = CopybookParser.Parse(copybookSource);
 
+            // A variable-length (OCCURS ... DEPENDING ON) copybook has no single
+            // static flat layout: each record's shape depends on a count read at
+            // decode time. The JSON flat-spec contract this action emits cannot
+            // carry that, and handing back a fixed spec would silently mis-decode
+            // every record whose count isn't the minimum. The engine supports ODO
+            // (FlatFileCodec's ParsedCopybook overloads), but exposing it through
+            // the Integration Studio action surface is a separate design step —
+            // rejected loudly here until that contract exists.
+            if (parsed.IsVariableLength)
+            {
+                errorMessage =
+                    $"Copybook uses OCCURS ... DEPENDING ON (variable-length table '{parsed.Odo!.TableName}', " +
+                    $"depending on '{parsed.Odo.DependsOn}'). The engine can decode/encode this, but the " +
+                    "Integration Studio JSON action surface does not yet expose variable-length layouts — its " +
+                    "flat spec is static. Use the Picasso.Core FlatFileCodec ParsedCopybook overloads directly.";
+                return false;
+            }
+
             flatSpecJson = JsonSerializer.Serialize(
                 parsed.Flat.Select(FieldSpecDto.From).ToList(), Json);
 
