@@ -378,6 +378,13 @@ public static class CopybookParser
     /// </summary>
     public static string StripComments(string source)
     {
+        // Drop any 0x1A (DOS/CP-M ^Z "SUB" end-of-file marker). A copybook
+        // transferred off a mainframe or through a DOS toolchain frequently carries
+        // a trailing 0x1A; it is not COBOL source, but left in place it becomes a
+        // stray token and falsely rejects an otherwise valid layout. It never
+        // appears in real COBOL source, so removing every occurrence is safe.
+        source = source.Replace("\u001A", "");
+
         var sb = new StringBuilder();
         foreach (var rawLine in source.Replace("\r\n", "\n").Split('\n'))
         {

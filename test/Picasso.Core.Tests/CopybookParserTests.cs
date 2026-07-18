@@ -704,4 +704,15 @@ public class CopybookParserTests
         }
         Assert.Equal(parsed.Root.Len, cursor);
     }
+
+    [Fact]
+    public void TrailingDosEofByteIsIgnored()
+    {
+        // A 0x1A (DOS ^Z EOF marker) frequently trails a transferred copybook; it
+        // must not become a stray token and reject the layout.
+        var source = "01  R.\n    05  A PIC X(3).\n    05  B PIC 9(4).\n" + (char)0x1A;
+        var parsed = CopybookParser.Parse(source);
+        Assert.Equal(new[] { "A", "B" }, parsed.Flat.Select(f => f.Name));
+        Assert.Equal(7, parsed.Flat.Max(f => f.Start + f.Len));
+    }
 }
