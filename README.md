@@ -6,6 +6,8 @@ A COBOL copybook parser packaged as an OutSystems Integration Studio Extension. 
 
 *The .NET implementation was written by Claude (Anthropic), directed and verified throughout by [Jonas Fiers](https://github.com/jonasfiers) — see [Contributions](#contributions).*
 
+**Every layout it derives is cross-checked against GnuCOBOL — a real COBOL compiler — and round-tripped through a genuine 1990s mainframe file whose expected values were published by an independent tool.** See [How it's validated](#how-its-validated).
+
 ## Why this exists
 
 The OutSystems Forge has no COBOL connector. Mainframe integrations get hand-rolled, every time, by someone reading `PIC` clauses off a copybook and typing byte offsets into a config file by hand.
@@ -49,6 +51,14 @@ It ships eleven bundled copybooks (the nine real CATALOG-74 layouts, one synthet
 None of the data is hand-authored. Seven files are CATALOG-74's own seed data. Two — `AMOUNT-OWED.DAT` and `AMOUNT-PAID.DAT` — are real GnuCOBOL output, captured by compiling CATALOG-74's `CALC-OWED`/`CALC-PAID` and running the batch, which matters because those two layouts have no hand-written `specs.js` counterpart to check against: a real COBOL runtime is the better golden anyway. `PORTRAIT-SAMPLE.DAT` is generated through PICASSO's own encoder rather than typed out, because hand-authoring COMP-3 nibbles is exactly the error-prone transcription this project exists to avoid. And `DTAR020.bin` is a real 1990s mainframe extract, byte-for-byte as it came off the system.
 
 The eleventh, [**DTAR020**](src/Picasso.Core/Samples/dtar020/README.md), isn't CATALOG-74's and isn't synthetic — it's a real copybook from an actual reporting system, dated 19/12/90. Running it as-is is what found the fixed-format-source, EBCDIC, undelimited-record, and headless-copy-member gaps — all four now handled. Both its files are bundled byte-for-byte as downloaded, with nothing adapted for PICASSO: the whole 10,233-byte extract decodes to typed values and re-encodes to the same bytes it arrived as, through nothing but the public API. It's the only sample whose data needs anything other than the default settings, and `GetSampleCopybook` reports the `EBCDIC` and `FIXED` it requires, because neither is detectable from the bytes.
+
+## How it's validated
+
+Getting byte offsets right is the entire job — a one-byte sizing error silently shifts every field after it — so PICASSO's layouts are checked three independent ways, none of them self-referential:
+
+- **Against a real COBOL compiler.** [`tools/layout-oracle`](tools/layout-oracle) is a differential harness: it compiles each copybook with **GnuCOBOL** (`cobc`, configured for IBM/MVS sizing), reads the authoritative `LENGTH OF` for every field and the whole record straight from the compiler, and diffs those against PICASSO's computed offsets. Run across the broad external corpus PICASSO is exercised on — several hundred real copybooks from [AbsaOSS/cobrix](https://github.com/AbsaOSS/cobrix), [JRecord](https://github.com/bmTas/JRecord), and [AWS CardDemo](https://github.com/aws-samples/aws-mainframe-modernization-carddemo) — PICASSO's record length matches the compiler on every copybook `cobc` can build, with a **single systematic exception**: the deliberate COMP-5 sizing dialect documented above (PICASSO uses IBM 2/4/8-byte sizing; native GnuCOBOL is byte-granular). Every new layout feature — REDEFINES, SYNC, nested/group `USAGE`, `OCCURS … DEPENDING ON` — is gated on an oracle pass before it merges.
+- **Against a real mainframe file, using values a third party published.** The bundled [DTAR020](src/Picasso.Core/Samples/dtar020/README.md) is a genuine 1990s extract (10,233 bytes, 379 records, EBCDIC + COMP-3 + undelimited + headless). [`Dtar020RealWorldTests`](test/Picasso.Core.Tests/Dtar020RealWorldTests.cs) decodes every record and asserts field values taken from an **independent tool's own published output** — [CobolToJson](https://github.com/bmTas/CobolToJson)'s README, not anything derived from PICASSO — then re-encodes the whole file to the exact bytes it arrived as.
+- **Against a human's hand-transcription.** [`ParityWithCatalog74Tests`](test/Picasso.Core.Tests/ParityWithCatalog74Tests.cs) reproduces, byte-for-byte, the offsets a developer once typed by hand into CATALOG-74's `specs.js` — with the one deliberate improvement described next.
 
 ## The one deliberate discrepancy
 
