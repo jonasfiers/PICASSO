@@ -604,8 +604,6 @@ public static class CopybookParser
             throw new FormatException(
                 $"Level {level} (RENAMES) is not supported: \"{statement}\".");
 
-        var name = tokens[1];
-
         string? pictureText = null;
         var comp3 = false;
         var binary = false;
@@ -620,7 +618,33 @@ public static class CopybookParser
         var odoMax = 0;
         string? odoDependsOn = null;
 
-        var i = 2;
+        string name;
+        int i;
+
+        // Nameless REDEFINES: "<level> REDEFINES <target> [clauses...]" — the token
+        // right after the level number is REDEFINES, with no data-name in between.
+        // COBOL (and GnuCOBOL) treat the omitted name as FILLER: this is a FILLER
+        // item that overlays <target>. Recognize it BEFORE tokens[1] is taken as a
+        // name, otherwise "REDEFINES" itself would become the field name and the
+        // subordinate fields would be laid out as fresh storage after the target
+        // instead of overlaying it — a silent miscompute. Capturing the target here
+        // routes it through the SAME REDEFINES overlay logic as the named form (see
+        // ComputeOffsets); nothing downstream needs to know the name was elided.
+        if (tokens[1].Equals("REDEFINES", StringComparison.OrdinalIgnoreCase))
+        {
+            if (tokens.Length < 3)
+                throw new FormatException(
+                    $"REDEFINES must be followed by the name of the item it redefines in \"{statement}\".");
+            name = "FILLER";
+            redefinesTarget = tokens[2];
+            i = 3; // resume clause scanning after "REDEFINES <target>"
+        }
+        else
+        {
+            name = tokens[1];
+            i = 2;
+        }
+
         while (i < tokens.Length)
         {
             var token = tokens[i].ToUpperInvariant();
