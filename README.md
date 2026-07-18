@@ -135,7 +135,7 @@ That's the whole verification loop, and it needs no Windows tooling. The parity 
 
 Integration Studio and Service Studio are proprietary, Windows-only GUI tools. Neither is scriptable, so this repo stops at the last portable artifact: a built, tested pair of DLLs plus the exact wiring steps.
 
-- **[`src/Picasso.Extension/README-IntegrationStudio.md`](src/Picasso.Extension/README-IntegrationStudio.md)** — creating the Extension, defining the five actions, referencing the DLLs, building, importing.
+- **[`src/Picasso.Extension/README-IntegrationStudio.md`](src/Picasso.Extension/README-IntegrationStudio.md)** — creating the Extension, defining the seven actions, referencing the DLLs, building, importing.
 - **[`docs/outsystems-app-spec.md`](docs/outsystems-app-spec.md)** — the demo app's screens, widgets, and Structures.
 - **[`docs/forge-submission.md`](docs/forge-submission.md)** — publishing to Forge: listing fields, icon, best-practice checklist, and the O11-vs-ODC compatibility question.
 - **[`docs/mainframe-ingestion.md`](docs/mainframe-ingestion.md)** — pulling a real extract off a mainframe via SFTP and decoding it directly, including the `Binary Data` handling this would still need.

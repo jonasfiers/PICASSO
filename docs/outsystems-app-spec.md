@@ -2,11 +2,11 @@
 
 A single-screen Reactive Web app that demonstrates the extension end to end: load a copybook, watch PICASSO derive its byte layout, then decode real fixed-width data against that layout and encode it back.
 
-This is a specification, not a file. Service Studio `.oml` modules are only editable inside Service Studio, so this describes what to build rather than shipping it. Everything it depends on — the five actions and their JSON shapes — is already built and tested in this repo; see [`../src/Picasso.Extension/README-IntegrationStudio.md`](../src/Picasso.Extension/README-IntegrationStudio.md) for getting the extension published first.
+This is a specification, not a file. Service Studio `.oml` modules are only editable inside Service Studio, so this describes what to build rather than shipping it. Everything it depends on — the seven actions and their JSON shapes — is already built and tested in this repo; see [`../src/Picasso.Extension/README-IntegrationStudio.md`](../src/Picasso.Extension/README-IntegrationStudio.md) for getting the extension published first.
 
 ## Prerequisite
 
-The `Picasso` extension published, and its five actions added via **Manage Dependencies**.
+The `Picasso` extension published, and its seven actions added via **Manage Dependencies**.
 
 ---
 
