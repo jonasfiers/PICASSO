@@ -12,7 +12,7 @@ It's built to become an **OutSystems Integration Studio Extension**, but this re
 
 ## Why this exists
 
-The OutSystems Forge has no COBOL connector. Mainframe integrations get hand-rolled, every time, by someone reading `PIC` clauses off a copybook and typing byte offsets into a config file by hand.
+The OutSystems Forge has no COBOL connector. So mainframe integrations there get hand-rolled — someone reads `PIC` clauses off a copybook and types byte offsets into a config file by hand.
 
 This repo's sibling project, [CATALOG-74](https://github.com/jonasfiers/CATALOG-74), demonstrates the gap in miniature. Its `api-cobol/lib/specs.js` is exactly that hand transcription:
 
@@ -27,7 +27,7 @@ const BALANCE_SPEC = [
 
 A human read `BALANCE-REC.cpy`, worked out that `PIC 9(7)V99` occupies nine bytes starting at offset 12, and typed `start: 12, len: 9`. It works. It's also a transcription of information that already exists, in machine-readable form, in the copybook sitting one directory away — and it silently rots the moment someone adds a field.
 
-Nobody wrote the thing that should exist: a parser that reads the actual copybook and derives those offsets itself. That's PICASSO.
+Copybook parsing itself is a thoroughly solved problem — [JRecord](https://github.com/bmTas/JRecord) and cb2xml have done it in Java for two decades, [Cobrix](https://github.com/AbsaOSS/cobrix) does it on Spark, every COBOL compiler does it, and .NET even has a couple of (unmaintained, undocumented, mostly structure-only) parsers on NuGet. What's missing isn't *a* parser — it's one you can use **from inside OutSystems**: native .NET, packaged for the platform, and trustworthy enough to stake a financial record on. That's PICASSO — point it at the actual copybook and it derives those offsets itself, then validates them against a real COBOL compiler.
 
 The proof is [`ParityWithCatalog74Tests`](test/Picasso.Core.Tests/ParityWithCatalog74Tests.cs): point PICASSO at CATALOG-74's own copybooks and watch it reproduce, byte-for-byte, the exact offsets a human once hand-mirrored.
 
