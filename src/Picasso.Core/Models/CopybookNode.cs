@@ -45,14 +45,16 @@ public sealed class CopybookNode
     /// (unless the redefinition is longer than its target, which extends the group).
     /// </summary>
     public string? RedefinesTarget { get; set; }
-    /// True for the single OCCURS ... DEPENDING ON table in a variable-length
+    /// True for an OCCURS ... DEPENDING ON table in a variable-length
     /// (ODO) copybook. Set by CopybookParser.ParseStatement. Unlike a fixed
     /// OCCURS, the repeat count is NOT known at parse time — it is read per
     /// record, at decode time, out of the field named <see cref="OdoDependsOn"/>.
     /// <see cref="OccursCount"/> is therefore not the authoritative count for an
     /// ODO table; it is set transiently to a concrete count while a concrete
-    /// layout is built (see CopybookParser.BuildConcreteLayout). Only one node in
-    /// a tree may carry this flag — more than one is rejected loudly at parse.
+    /// layout is built (see CopybookParser.BuildConcreteLayout). Several nodes in
+    /// a tree may carry this flag — a record may hold multiple flat ODO tables,
+    /// resolved left-to-right. An ODO table nested inside (or containing) another
+    /// OCCURS is still rejected loudly at parse.
     /// </summary>
     public bool IsOdoTable { get; set; }
 
@@ -69,25 +71,48 @@ public sealed class CopybookNode
     /// </summary>
     public string? OdoDependsOn { get; set; }
 
+    /// <summary>
+    /// True when this item carries a SYNCHRONIZED / SYNC clause. It changes only
+    /// WHERE the item sits, never how its value is read: a SYNC <b>binary</b>
+    /// (COMP/COMP-4/COMP-5/BINARY) item is aligned to its natural 2/4/8-byte
+    /// boundary by inserting slack (padding) bytes before it, which shifts every
+    /// following field. SYNC on any non-binary item (DISPLAY, COMP-3, Text/edited,
+    /// or a group) is a documented no-op in IBM COBOL — tolerated, no padding.
+    /// Set by CopybookParser.ParseStatement; consumed by ComputeOffsets.
+    /// </summary>
+    public bool Synchronized { get; set; }
+
+    /// <summary>
+    /// The number of slack (padding) bytes ComputeOffsets inserted <b>before</b> a
+    /// SYNC binary item to align it to its byte boundary — 0 when no alignment was
+    /// needed or the item isn't a SYNC binary. Recomputed on every ComputeOffsets
+    /// pass (an ODO record's SYNC field can shift between counts), and materialized
+    /// by Flatten into a synthetic FILLER leaf so the flat layout stays contiguous.
+    /// </summary>
+    public int SyncSlack { get; set; }
+
     /// <summary>Populated by CopybookParser.ComputeOffsets.</summary>
     public int Start { get; set; }
     public int Len { get; set; }
 }
 
 /// <summary>
-/// The descriptor for a variable-length (OCCURS ... DEPENDING ON) copybook —
-/// the one thing a static flat layout cannot express. Present on
-/// <see cref="ParsedCopybook.Odo"/> exactly when the copybook has an ODO table.
+/// The descriptor for one OCCURS ... DEPENDING ON table — the one thing a
+/// static flat layout cannot express. A variable-length copybook carries one
+/// of these per ODO table, in source order, on
+/// <see cref="ParsedCopybook.Odos"/>.
 ///
-/// PICASSO supports the single, common case: EXACTLY ONE OCCURS m TO n
-/// DEPENDING ON dep per record, dep defined before the table so its value is
-/// readable before the variable section begins. Everything harder (two ODO
-/// tables, nested ODO, an ODO combined with an OCCURS that can't be cleanly
-/// modelled, or a dep that comes after the table) is rejected loudly at parse.
+/// PICASSO supports several flat ODO tables per record (each dep defined
+/// before its table so its value is readable before that table's section
+/// begins) and lower bounds down to 0 (OCCURS 0 TO n). Because a later table's
+/// dep field sits at an offset that itself depends on earlier tables' counts,
+/// the counts are resolved left-to-right per record. Everything harder — an
+/// ODO nested inside an OCCURS, an OCCURS nested inside an ODO, nested OCCURS,
+/// or a dep that comes after its table — is rejected loudly at parse.
 ///
 /// The concrete byte layout is not fixed: it is built per record, once the
-/// actual count is read from <see cref="DependingField"/>, by
-/// CopybookParser.BuildConcreteLayout(count).
+/// actual counts are read from the depending fields, by
+/// CopybookParser.BuildConcreteLayout(counts).
 /// </summary>
 public sealed class OdoInfo
 {
@@ -113,10 +138,13 @@ public sealed class OdoInfo
     public int Max { get; }
 
     /// <summary>
-    /// The depending field's flat spec, at its fixed offset in the record's
-    /// prefix (identical in every concrete layout, since it precedes the table).
-    /// The codec reads it to learn each record's occurrence count before it can
-    /// build that record's concrete layout.
+    /// The depending field's flat spec, taken from the representative (minimum
+    /// count) layout. For the FIRST ODO table its offset is fixed and
+    /// authoritative — nothing variable precedes it. For a LATER table it is
+    /// only representative: the field's real offset shifts with the earlier
+    /// tables' counts, so the codec re-reads it by name from the per-record
+    /// partial layout rather than trusting this offset. Retained for the
+    /// single-table case and for callers that want the field's type/length.
     /// </summary>
     public FieldSpec DependingField { get; }
 }
@@ -127,12 +155,12 @@ public sealed class ParsedCopybook
         CopybookNode root,
         IReadOnlyList<FieldSpec> flat,
         bool rootIsSynthetic = false,
-        OdoInfo? odo = null)
+        IReadOnlyList<OdoInfo>? odos = null)
     {
         Root = root;
         Flat = flat;
         RootIsSynthetic = rootIsSynthetic;
-        Odo = odo;
+        Odos = odos ?? System.Array.Empty<OdoInfo>();
     }
 
     public CopybookNode Root { get; }
@@ -160,11 +188,22 @@ public sealed class ParsedCopybook
     public bool RootIsSynthetic { get; }
 
     /// <summary>
-    /// The variable-length (OCCURS ... DEPENDING ON) descriptor, or null for an
-    /// ordinary fixed-layout copybook. See <see cref="OdoInfo"/>.
+    /// The variable-length (OCCURS ... DEPENDING ON) descriptors, one per ODO
+    /// table, in source (record) order. Empty for an ordinary fixed-layout
+    /// copybook. The codec resolves the tables' occurrence counts left-to-right
+    /// per record (a later table's dep field offset depends on earlier counts).
+    /// See <see cref="OdoInfo"/>.
     /// </summary>
-    public OdoInfo? Odo { get; }
+    public IReadOnlyList<OdoInfo> Odos { get; }
+
+    /// <summary>
+    /// The first ODO table's descriptor, or null for a fixed-layout copybook —
+    /// a convenience for the common single-table case and for callers that only
+    /// need to report "this copybook is variable-length". Use <see cref="Odos"/>
+    /// when a record may hold more than one ODO table.
+    /// </summary>
+    public OdoInfo? Odo => Odos.Count > 0 ? Odos[0] : null;
 
     /// <summary>True when this copybook's record length is data-dependent (ODO).</summary>
-    public bool IsVariableLength => Odo != null;
+    public bool IsVariableLength => Odos.Count > 0;
 }

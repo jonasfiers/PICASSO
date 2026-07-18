@@ -119,20 +119,28 @@ public static class FlatFileCodec
         if (!parsed.IsVariableLength)
             return Encode(parsed.Flat, records, encoding, format);
 
-        var odo = parsed.Odo!;
+        var odos = parsed.Odos;
         var lines = new List<string>();
         foreach (var record in records)
         {
-            if (!record.TryGetValue(odo.DependsOn, out var depValue))
-                throw new FormatException(
-                    $"Record is missing the depending field '{odo.DependsOn}', which sets the occurrence " +
-                    $"count for the variable-length table '{odo.TableName}'.");
+            // Every table's count comes straight from the record's own depending
+            // field values — no offset resolution needed on encode, since the
+            // caller supplies the values directly. One count per table, in order.
+            var counts = new List<int>(odos.Count);
+            foreach (var odo in odos)
+            {
+                if (!record.TryGetValue(odo.DependsOn, out var depValue))
+                    throw new FormatException(
+                        $"Record is missing the depending field '{odo.DependsOn}', which sets the occurrence " +
+                        $"count for the variable-length table '{odo.TableName}'.");
 
-            var count = ToCount(depValue, odo.DependsOn);
-            ValidateCount(count, odo);
-            RejectOverProvidedEntries(record, odo, count);
+                var count = ToCount(depValue, odo.DependsOn);
+                ValidateCount(count, odo);
+                RejectOverProvidedEntries(record, odo, count);
+                counts.Add(count);
+            }
 
-            var spec = CopybookParser.BuildConcreteLayout(parsed, count);
+            var spec = CopybookParser.BuildConcreteLayout(parsed, counts);
             lines.Add(EncodeRecordFields(spec, record, encoding));
         }
 
@@ -142,20 +150,17 @@ public static class FlatFileCodec
     private static List<Dictionary<string, object>> DecodeVariableDelimited(
         ParsedCopybook parsed, string text, CharacterEncoding encoding)
     {
-        var odo = parsed.Odo!;
         var records = new List<Dictionary<string, object>>();
 
         foreach (var line in text.Replace("\r\n", "\n").Split('\n').Where(l => l.Length > 0))
         {
-            var count = ReadCountFromRecord(line, offset: 0, odo, encoding);
-            ValidateCount(count, odo);
-
-            var spec = CopybookParser.BuildConcreteLayout(parsed, count);
+            var counts = ResolveCounts(parsed, line, recordOffset: 0, encoding);
+            var spec = CopybookParser.BuildConcreteLayout(parsed, counts);
             var expected = spec.Sum(f => f.Len);
             if (line.Length != expected)
                 throw new FormatException(
-                    $"Variable-length record with {odo.DependsOn}={count} is {line.Length} bytes, expected " +
-                    $"{expected} bytes for that occurrence count.");
+                    $"Variable-length record with counts [{string.Join(",", counts)}] is {line.Length} bytes, " +
+                    $"expected {expected} bytes for those occurrence counts.");
 
             records.Add(DecodeRecordFields(spec, line, encoding));
         }
@@ -165,32 +170,24 @@ public static class FlatFileCodec
     private static List<Dictionary<string, object>> DecodeVariableFixedLength(
         ParsedCopybook parsed, string text, CharacterEncoding encoding)
     {
-        var odo = parsed.Odo!;
         var records = new List<Dictionary<string, object>>();
 
         // Walk the undelimited stream: each record's length is only known once its
-        // depending field has been read, so records are sliced one at a time,
-        // advancing by the length the count implies. A record that would run past
-        // the end of the file, or a partial record left over, fails loudly.
+        // depending field(s) have been read, so records are sliced one at a time,
+        // advancing by the length the counts imply. ResolveCounts guards each dep
+        // field read against the end of the stream; a record that would run past
+        // the end, or a partial record left over, fails loudly.
         var pos = 0;
         while (pos < text.Length)
         {
-            var depEnd = pos + odo.DependingField.Start + odo.DependingField.Len;
-            if (depEnd > text.Length)
-                throw new FormatException(
-                    $"Undelimited file ends mid-record: only {text.Length - pos} bytes remain at offset {pos}, " +
-                    $"too few to read the depending field '{odo.DependsOn}'.");
-
-            var count = ReadCountFromRecord(text, pos, odo, encoding);
-            ValidateCount(count, odo);
-
-            var spec = CopybookParser.BuildConcreteLayout(parsed, count);
+            var counts = ResolveCounts(parsed, text, recordOffset: pos, encoding);
+            var spec = CopybookParser.BuildConcreteLayout(parsed, counts);
             var recordLen = spec.Sum(f => f.Len);
             if (pos + recordLen > text.Length)
                 throw new FormatException(
-                    $"Undelimited record at offset {pos} with {odo.DependsOn}={count} needs {recordLen} bytes " +
-                    $"but only {text.Length - pos} remain. Either the layout doesn't match this file or a " +
-                    "record is truncated.");
+                    $"Undelimited record at offset {pos} with counts [{string.Join(",", counts)}] needs " +
+                    $"{recordLen} bytes but only {text.Length - pos} remain. Either the layout doesn't match " +
+                    "this file or a record is truncated.");
 
             records.Add(DecodeRecordFields(spec, text.Substring(pos, recordLen), encoding));
             pos += recordLen;
@@ -199,22 +196,47 @@ public static class FlatFileCodec
     }
 
     /// <summary>
-    /// Reads the depending field out of a record slice and returns its value as
-    /// an occurrence count. <paramref name="offset"/> is the record's start in
-    /// <paramref name="text"/>; the depending field's own Start is relative to it.
+    /// Resolves every ODO table's occurrence count for one record, left-to-right.
+    /// Each table's depending field precedes it, but a later table's dep field
+    /// sits at an offset that depends on the earlier tables' counts — so the
+    /// counts cannot all be read up front. Instead, for each table in source
+    /// order: build a partial concrete layout with the counts resolved so far
+    /// (later tables at their minimum), which fixes the offset of the next
+    /// depending field; read it out of the record; validate; append; continue.
+    /// <paramref name="recordOffset"/> is the record's start in <paramref name="text"/>.
     /// </summary>
-    private static int ReadCountFromRecord(string text, int offset, OdoInfo odo, CharacterEncoding encoding)
+    private static List<int> ResolveCounts(
+        ParsedCopybook parsed, string text, int recordOffset, CharacterEncoding encoding)
     {
-        var dep = odo.DependingField;
-        if (offset + dep.Start + dep.Len > text.Length)
-            throw new FormatException(
-                $"Record starting at offset {offset} is too short to contain its depending field " +
-                $"'{odo.DependsOn}' (needs {dep.Start + dep.Len} bytes, has {text.Length - offset}). " +
-                "The layout does not match this file.");
+        var odos = parsed.Odos;
+        var counts = new List<int>(odos.Count);
 
-        var raw = text.Substring(offset + dep.Start, dep.Len);
-        var value = DecodeField(raw, dep, encoding);
-        return ToCount(value, odo.DependsOn);
+        for (var i = 0; i < odos.Count; i++)
+        {
+            var spec = CopybookParser.BuildConcreteLayout(parsed, counts);
+
+            // The depending field is a plain field ahead of its table, so it
+            // carries its bare name in the flat layout (never an indexed table
+            // name — a dep field inside a repeating table is rejected at parse).
+            var dep = spec.FirstOrDefault(f => f.Name == odos[i].DependsOn)
+                ?? throw new FormatException(
+                    $"Internal: depending field '{odos[i].DependsOn}' for table '{odos[i].TableName}' was not " +
+                    "found in the resolved layout.");
+
+            if (recordOffset + dep.Start + dep.Len > text.Length)
+                throw new FormatException(
+                    $"Record starting at offset {recordOffset} is too short to contain its depending field " +
+                    $"'{odos[i].DependsOn}' (needs {dep.Start + dep.Len} bytes from the record start, has " +
+                    $"{text.Length - recordOffset}). The layout does not match this file.");
+
+            var raw = text.Substring(recordOffset + dep.Start, dep.Len);
+            var value = DecodeField(raw, dep, encoding);
+            var count = ToCount(value, odos[i].DependsOn);
+            ValidateCount(count, odos[i]);
+            counts.Add(count);
+        }
+
+        return counts;
     }
 
     private static int ToCount(object value, string fieldName)

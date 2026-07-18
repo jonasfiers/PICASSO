@@ -330,16 +330,20 @@ public class OdoTests
     }
 
     [Fact]
-    public void TwoOdoTablesInOneRecordAreRejected()
+    public void TwoOdoTablesInOneRecordAreNowSupported()
     {
-        var ex = Assert.Throws<FormatException>(() => CopybookParser.Parse(@"
+        // Formerly rejected; multiple flat ODO tables per record are now handled.
+        var parsed = CopybookParser.Parse(@"
             01  R.
                 05  C1 PIC 9(2).
                 05  T1 PIC X(3) OCCURS 1 TO 5 DEPENDING ON C1.
                 05  C2 PIC 9(2).
                 05  T2 PIC X(3) OCCURS 1 TO 5 DEPENDING ON C2.
-        "));
-        Assert.Contains("More than one OCCURS ... DEPENDING ON", ex.Message);
+        ");
+        Assert.True(parsed.IsVariableLength);
+        Assert.Equal(2, parsed.Odos.Count);
+        Assert.Equal(new[] { "T1", "T2" }, parsed.Odos.Select(o => o.TableName));
+        Assert.Equal(new[] { "C1", "C2" }, parsed.Odos.Select(o => o.DependsOn));
     }
 
     [Fact]
