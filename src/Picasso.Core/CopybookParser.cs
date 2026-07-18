@@ -126,8 +126,8 @@ public static class CopybookParser
     }
 
     /// <summary>
-    /// Turns one resolved record root into a <see cref="ParsedCopybook"/>: rejects
-    /// nested OCCURS, computes byte offsets from 0, flattens to leaf fields, and
+    /// Turns one resolved record root into a <see cref="ParsedCopybook"/>: computes
+    /// byte offsets from 0, flattens to (nested-OCCURS-expanded) leaf fields, and
     /// applies the fail-loud empty-record guard. Shared by <see cref="Parse"/> and
     /// <see cref="ParseRecords"/> so a record is finalized identically either way.
     /// </summary>
@@ -141,14 +141,19 @@ public static class CopybookParser
         // ComputeOffsets (which reads Field.Len).
         InheritGroupUsage(root, DeclaredUsage.None);
 
-        RejectNestedOccurs(root, insideOccurs: false);
+        // Nested FIXED-count OCCURS (a table of tables) is supported: it flattens
+        // recursively, each level carrying its own 1-based index. No dedicated
+        // rejection pass is needed for it — the offset math (ComputeOffsets) and the
+        // name/offset expansion (Flatten) both recurse. Any nesting that involves an
+        // OCCURS ... DEPENDING ON table (an ODO inside an OCCURS, or any OCCURS
+        // inside an ODO) stays rejected loudly, enforced by ValidateAndFindOdos below.
         RejectSyncInOccurs(root, insideOccurs: false);
 
-        // Locate the (at most one) OCCURS ... DEPENDING ON table and validate its
-        // structural preconditions before any offset is computed. More than one,
-        // an ODO nested in another OCCURS, or an OCCURS nested inside the ODO's
-        // own subtree are each rejected loudly — the common single-ODO case is
-        // the only variable-length shape supported.
+        // Locate the OCCURS ... DEPENDING ON tables and validate their structural
+        // preconditions before any offset is computed. An ODO nested in another
+        // OCCURS (fixed or ODO), or an OCCURS (fixed or ODO) nested inside an ODO's
+        // own subtree, are each rejected loudly — only all-FIXED-count nesting is
+        // supported; any variable-length nesting is out of scope.
         var odoNodes = ValidateAndFindOdos(root);
 
         // For an ODO copybook every ODO table is expanded to its MINIMUM count
@@ -1390,27 +1395,6 @@ public static class CopybookParser
     }
 
     /// <summary>
-    /// Rejects a table of tables — an OCCURS item anywhere beneath another OCCURS
-    /// item. A deliberate, named non-goal for this pass, distinct from OCCURS ...
-    /// DEPENDING ON: the offset math generalizes cleanly, but the flattened-name
-    /// convention (which index binds to which level) and its test surface are a
-    /// separate design decision left for future work. Rejected loudly rather than
-    /// mis-expanded, matching how this parser treats every other unmodeled shape.
-    /// </summary>
-    private static void RejectNestedOccurs(CopybookNode node, bool insideOccurs)
-    {
-        if (node.OccursCount > 1 && insideOccurs)
-            throw new FormatException(
-                $"Nested OCCURS is not supported: field '{node.Name}' has an OCCURS clause inside another " +
-                "OCCURS item (a table of tables). Only a single level of OCCURS is supported. This is a " +
-                "distinct non-goal from OCCURS ... DEPENDING ON — both are unsupported, for different reasons.");
-
-        var nowInside = insideOccurs || node.OccursCount > 1;
-        foreach (var child in node.Children)
-            RejectNestedOccurs(child, nowInside);
-    }
-
-    /// <summary>
     /// Rejects a SYNCHRONIZED binary item that occurs, or sits inside an OCCURS
     /// table (fixed or ODO). Per-occurrence alignment adds trailing-element slack
     /// rules — a table's element stride must stay a multiple of the SYNC item's
@@ -1533,41 +1517,75 @@ public static class CopybookParser
     }
 
     public static void Flatten(CopybookNode node, List<FieldSpec> into)
+        => EmitSubtree(node, into, shift: 0, prefix: null);
+
+    /// <summary>
+    /// Flattens a subtree into leaf <see cref="FieldSpec"/>s, expanding every OCCURS
+    /// level it meets — at any depth. <paramref name="shift"/> is the byte offset to
+    /// add to every leaf's <see cref="FieldSpec.Start"/> (the accumulated stride of
+    /// the enclosing OCCURS iterations); <paramref name="prefix"/> is the accumulated
+    /// name prefix (null at the record root, else a chain of NAME(index) segments).
+    ///
+    /// <para>
+    /// The OCCURS expansion is <b>compositional</b>: an OCCURS node produces
+    /// <c>OccursCount</c> 1-indexed copies, and for EACH copy it recurses into its
+    /// own children/field with the copy's index appended to the prefix and the copy's
+    /// stride added to the shift. When a copy's subtree contains a further OCCURS,
+    /// that inner OCCURS expands in turn — so a table of tables yields names carrying
+    /// every level's index (<c>LINE(1)-ITEM(1)-CODE</c>, <c>LINE(2)-ITEM(4)-CODE</c>,
+    /// …) with sequential offsets. One OCCURS iteration's byte length is
+    /// <c>node.Len / OccursCount</c>; because <see cref="ComputeOffsets"/> already
+    /// rolled any inner OCCURS multiplication into that Len, the stride is the full
+    /// size of one fully-expanded inner element, exactly as required.
+    /// </para>
+    ///
+    /// <para>
+    /// A non-OCCURS group contributes no name segment of its own (matching the
+    /// single-level convention <c>LINE-ITEM(2)-ITEM-QTY</c>, where only the
+    /// OCCURS-bearing group and the leaf name appear); it just passes prefix and
+    /// shift to its children. A leaf's name is the prefix + '-' + its own name, or
+    /// just its own name at the record root. The '-' separator can never collide
+    /// with a real field name because every prefix segment carries a
+    /// parenthesized index and '(' / ')' are not legal in a COBOL identifier.
+    /// </para>
+    /// </summary>
+    private static void EmitSubtree(CopybookNode node, List<FieldSpec> into, int shift, string? prefix)
     {
-        // An ODO table is always expanded with 1-indexed names (TAB(1)…TAB(count))
-        // even at count 1, so the naming convention is identical at every count —
-        // a decode and an encode at the same count therefore agree on field keys.
+        // An OCCURS level (fixed) or an ODO table (always expanded with 1-indexed
+        // names even at count 1, so decode and encode agree on field keys).
         if (node.OccursCount > 1 || node.IsOdoTable)
         {
             // An ODO table resolved to 0 occurrences (OCCURS 0 TO n, count 0)
             // contributes no fields at all; everything after it has already been
-            // laid out starting at this table's offset. Return before the
-            // division below (node.Len is 0 here, so oneIterationLen would divide
-            // by zero).
+            // laid out starting at this table's offset. Return before the division
+            // below (node.Len is 0 here, so oneIterationLen would divide by zero).
             if (node.OccursCount == 0)
                 return;
 
-            // One OCCURS item -> OccursCount indexed copies. COBOL tables are
-            // 1-indexed, so copies run (1)..(n). Nested OCCURS is rejected before
-            // we get here, so an OCCURS subtree contains no further OCCURS and one
-            // iteration's byte length is simply node.Len / OccursCount.
+            // One iteration's byte length. For a nested table this already includes
+            // any inner OCCURS multiplication (ComputeOffsets rolled it into Len), so
+            // the stride is the full size of one fully-expanded inner element.
             var oneIterationLen = node.Len / node.OccursCount;
             for (var index = 1; index <= node.OccursCount; index++)
             {
-                var shift = (index - 1) * oneIterationLen;
-                var indexedName = $"{node.Name}({index})";
+                var childShift = shift + (index - 1) * oneIterationLen;
+                var indexedName = prefix is null
+                    ? $"{node.Name}({index})"
+                    : $"{prefix}-{node.Name}({index})";
 
                 if (node.IsGroup)
                 {
                     // Group OCCURS: the parenthesized index rides on the group name
-                    // and prefixes every descendant leaf, e.g. LINE-ITEM(2)-ITEM-QTY.
+                    // and prefixes every descendant, recursing so an inner OCCURS
+                    // expands too (e.g. LINE(2)-ITEM(1)-CODE for a table of tables).
                     foreach (var child in node.Children)
-                        EmitIndexedLeaves(child, into, shift, indexedName);
+                        EmitSubtree(child, into, childShift, indexedName);
                 }
                 else
                 {
-                    // Elementary OCCURS: the leaf itself becomes NAME(index).
-                    into.Add(ShiftField(node.Field!, shift, indexedName));
+                    // Elementary OCCURS: the leaf itself becomes prefix-NAME(index)
+                    // (or NAME(index) at the root).
+                    into.Add(ShiftField(node.Field!, childShift, indexedName));
                 }
             }
             return;
@@ -1575,8 +1593,9 @@ public static class CopybookParser
 
         if (node.IsGroup)
         {
+            // A non-OCCURS group contributes no name segment: pass prefix/shift down.
             foreach (var child in node.Children)
-                Flatten(child, into);
+                EmitSubtree(child, into, shift, prefix);
         }
         else
         {
@@ -1584,14 +1603,15 @@ public static class CopybookParser
             // it. Emit them as a synthetic FILLER leaf so the flat layout stays
             // contiguous (no gaps) — decode captures the padding and encode emits
             // it, so a SYNC record round-trips byte-for-byte with no codec change.
-            // A SYNC binary never occurs (rejected upstream), so slack only ever
-            // reaches this non-OCCURS leaf branch. The name embeds the slack's
+            // A SYNC binary never occurs (rejected upstream), so a slack-bearing leaf
+            // is never inside an OCCURS and its shift is 0; it is added anyway so the
+            // filler's Start stays correct regardless. The name embeds the slack's
             // start offset, and '-' is legal in a COBOL identifier but a real field
             // would never be named this — a collision is not a correctness risk
             // anyway, since fillers carry passthrough bytes, not decoded values.
             if (node.SyncSlack > 0)
             {
-                var slackStart = node.Field!.Start - node.SyncSlack;
+                var slackStart = node.Field!.Start - node.SyncSlack + shift;
                 into.Add(new FieldSpec
                 {
                     Name = $"FILLER-SYNC-{slackStart}",
@@ -1603,29 +1623,10 @@ public static class CopybookParser
 
             // A copy, not the tree's own FieldSpec: BuildConcreteLayout recomputes
             // offsets on the shared tree at different counts, and a returned layout
-            // must never be mutated retroactively by a later call.
-            into.Add(node.Field! with { });
-        }
-    }
-
-    /// <summary>
-    /// Emits the leaves of one iteration of an OCCURS group, offset by
-    /// <paramref name="shift"/> bytes and named <paramref name="prefix"/> + '-' +
-    /// leaf name. The '-' separator is unambiguous because the prefix always
-    /// carries a parenthesized index (NAME(k)-...), and '(' / ')' are not legal in
-    /// a COBOL identifier — so an expanded name can never collide with a real one.
-    /// Only OccursCount == 1 subtrees reach here (nested OCCURS is rejected).
-    /// </summary>
-    private static void EmitIndexedLeaves(CopybookNode node, List<FieldSpec> into, int shift, string prefix)
-    {
-        if (node.IsGroup)
-        {
-            foreach (var child in node.Children)
-                EmitIndexedLeaves(child, into, shift, prefix);
-        }
-        else
-        {
-            into.Add(ShiftField(node.Field!, shift, $"{prefix}-{node.Field!.Name}"));
+            // must never be mutated retroactively by a later call. At the record
+            // root (prefix null, shift 0) this reproduces the field's own name/offset.
+            var name = prefix is null ? node.Field!.Name : $"{prefix}-{node.Field!.Name}";
+            into.Add(ShiftField(node.Field!, shift, name));
         }
     }
 

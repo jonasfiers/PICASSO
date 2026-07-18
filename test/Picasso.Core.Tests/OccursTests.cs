@@ -13,10 +13,11 @@ namespace Picasso.Core.Tests;
 /// Len, Type} model the rest of PICASSO runs on never has to learn about
 /// repetition. Elementary OCCURS becomes NAME(1)..NAME(n); a group OCCURS
 /// propagates the parenthesized index into every descendant, e.g.
-/// LINE-ITEM(2)-ITEM-QTY. The two harder shapes — OCCURS ... DEPENDING ON and
-/// nested OCCURS — stay rejected, each with its own distinct error, and are
-/// asserted here next to the feature so neither can slip through as a side
-/// effect of the fixed-count path.
+/// LINE-ITEM(2)-ITEM-QTY. Nested FIXED-count OCCURS (a table of tables) is now
+/// flattened recursively — see NestedOccursTests. The variable-length shapes
+/// that stay rejected — OCCURS ... DEPENDING ON nested in an OCCURS, and any
+/// OCCURS nested in an ODO — are asserted here next to the feature so no
+/// variable-length nesting can slip through as a side effect of the fixed path.
 /// </summary>
 public class OccursTests
 {
@@ -239,35 +240,37 @@ public class OccursTests
     }
 
     [Fact]
-    public void NestedOccursIsRejectedAsASeparateNamedNonGoal()
+    public void OdoNestedInsideAFixedOccursIsRejected()
     {
-        // A table of tables is a real construct but a deliberate non-goal for this
-        // pass. Its message names nested OCCURS and is distinct from the ODO one.
+        // A variable-length (DEPENDING ON) table nested inside a fixed OCCURS is
+        // still out of scope: its offset would itself be index-dependent. Only
+        // all-FIXED-count nesting is supported.
         var ex = Assert.Throws<FormatException>(() => CopybookParser.Parse(@"
             01  R.
-                05  OUTER OCCURS 2 TIMES.
-                    10  INNER PIC X(3) OCCURS 4 TIMES.
+                05  N PIC 9(2).
+                05  OUTER OCCURS 3 TIMES.
+                    10  INNER OCCURS 1 TO 5 TIMES DEPENDING ON N.
+                        15  V PIC X(2).
         "));
-
-        // Named as nested OCCURS, not silently expanded as if the inner count
-        // were 1. (The message contrasts itself against ODO by name, so its own
-        // identity is "Nested OCCURS", asserted here.)
-        Assert.Contains("Nested OCCURS", ex.Message);
-        Assert.Contains("table of tables", ex.Message);
-        Assert.Contains("INNER", ex.Message);
+        Assert.Contains("DEPENDING ON", ex.Message);
+        Assert.Contains("nested inside another OCCURS", ex.Message);
     }
 
     [Fact]
-    public void NestedOccursOnGroupsIsAlsoRejected()
+    public void FixedOccursNestedInsideAnOdoTableIsRejected()
     {
+        // The inverse: a fixed OCCURS inside an ODO table. The outer table being
+        // variable makes the whole shape a variable-length table-of-tables, still
+        // rejected loudly.
         var ex = Assert.Throws<FormatException>(() => CopybookParser.Parse(@"
             01  R.
-                05  OUTER OCCURS 2 TIMES.
-                    10  MIDDLE OCCURS 3 TIMES.
-                        15  LEAF PIC X(1).
+                05  N PIC 9(2).
+                05  OUTER OCCURS 1 TO 5 TIMES DEPENDING ON N.
+                    10  INNER OCCURS 3 TIMES.
+                        15  V PIC X(2).
         "));
-        Assert.Contains("Nested OCCURS", ex.Message);
-        Assert.Contains("MIDDLE", ex.Message);
+        Assert.Contains("OCCURS", ex.Message);
+        Assert.Contains("INNER", ex.Message);
     }
 
     [Fact]
