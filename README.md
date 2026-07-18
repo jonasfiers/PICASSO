@@ -2,7 +2,9 @@
 
 **PICTURE Interpreter for COBOL, Assembling Structured Schemas for OutSystems**
 
-A COBOL copybook parser packaged as an OutSystems Integration Studio Extension. Point it at a `.cpy` file and it derives the byte layout — offsets, lengths, implied decimals, packed-decimal widths, sign placement — then decodes and encodes the fixed-width files that layout describes.
+A COBOL copybook parser in C#/.NET. Point it at a `.cpy` file and it derives the byte layout — offsets, lengths, implied decimals, packed-decimal widths, sign placement — then decodes and encodes the fixed-width files that layout describes.
+
+It's built to become an **OutSystems Integration Studio Extension**, but this repo isn't that extension — it's the portable core the extension is built *from*: the parsing/decoding engine (`Picasso.Core`) and the Integration Studio action classes that wrap it (`Picasso.Extension`), as a built, tested pair of DLLs. Assembling those into the extension itself is a manual step in Integration Studio — a Windows-only GUI tool — documented under [Using it from OutSystems](#using-it-from-outsystems), not automated here.
 
 *The .NET implementation was written by Claude (Anthropic), directed and verified throughout by [Jonas Fiers](https://github.com/jonasfiers) — see [Contributions](#contributions).*
 
