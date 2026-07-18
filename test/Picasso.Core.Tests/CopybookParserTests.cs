@@ -762,4 +762,22 @@ public class CopybookParserTests
         Assert.Equal(new[] { "A", "B", "C" }, parsed.Flat.Select(f => f.Name));
         Assert.Equal(9, parsed.Flat.Max(f => f.Start + f.Len));
     }
+
+    [Fact]
+    public void AlphanumericSequenceNumberInCols1To6IsStripped()
+    {
+        // Real copybooks put programmer change-tags (letters+digits) in the cols-1-6
+        // sequence area. The 6-digit-only rule missed them and the tag leaked as a
+        // stray token; now a 6-char alphanumeric sequence area (with a level number
+        // in the code area) is recognized and stripped.
+        var source =
+            "JL0001 01  REC.\n" +
+            "JL0001     05 FLD-A PIC X(5).\n" +
+            "JL0001     05 FLD-B PIC 9(3).\n";
+        var parsed = CopybookParser.Parse(source);
+        Assert.Equal(new[] { "FLD-A", "FLD-B" }, parsed.Flat.Select(f => f.Name));
+        Assert.Equal(0, parsed.Flat[0].Start);
+        Assert.Equal(5, parsed.Flat[1].Start);
+        Assert.Equal(8, parsed.Flat.Max(f => f.Start + f.Len));
+    }
 }

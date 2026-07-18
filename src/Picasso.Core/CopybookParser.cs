@@ -434,7 +434,7 @@ public static class CopybookParser
             var line = rawLine;
             var continuation = false;
 
-            if (FixedFormatSequenceNumber.IsMatch(line))
+            if (FixedFormatSequenceNumber.IsMatch(line) || HasAlphanumericSequenceArea(line))
             {
                 line = line.Substring(6);
                 if (line.Length > FixedFormatCodeLength)
@@ -592,6 +592,36 @@ public static class CopybookParser
         }
         quote = active;
         return active != '\0';
+    }
+
+    /// <summary>
+    /// True when columns 1-6 are a fixed-format sequence area that is NOT purely
+    /// numeric — six non-space characters (a programmer change-tag like "JL0001"),
+    /// with either a comment/continuation indicator in column 7, or a level number
+    /// beginning the code area. That extra requirement is what keeps a free-format
+    /// line from being mistaken for a sequenced one: a free-format data entry opens
+    /// with a level number (a space by column 3), so it never presents six unbroken
+    /// characters before column 7. The purely-numeric case is handled separately by
+    /// <see cref="FixedFormatSequenceNumber"/>.
+    /// </summary>
+    private static bool HasAlphanumericSequenceArea(string line)
+    {
+        if (line.Length < 8) return false;
+        for (var i = 0; i < 6; i++)
+            if (!char.IsLetterOrDigit(line[i])) return false;
+
+        var indicator = line[6];
+        // A comment ('*'), continuation ('-') or form-feed ('/') indicator after a
+        // six-char sequence area is itself the fixed-format signature.
+        if (indicator == '*' || indicator == '-' || indicator == '/') return true;
+        // Otherwise the indicator must be blank (or a debug 'D'), and the code area
+        // must open with a level number.
+        if (indicator != ' ' && indicator != 'D' && indicator != 'd') return false;
+
+        var code = line.Substring(7).TrimStart();
+        var digits = 0;
+        while (digits < code.Length && char.IsDigit(code[digits])) digits++;
+        return digits >= 1 && digits <= 2 && (digits == code.Length || code[digits] == ' ');
     }
 
     /// <summary>True when columns 1-6 (0-indexed 0-5) of a line are all blank.</summary>
