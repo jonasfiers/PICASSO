@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased — nested fixed-count `OCCURS` (table of tables)
+
+- Nested **fixed-count** `OCCURS` — an `OCCURS` item inside another `OCCURS`, all fixed counts, to arbitrary depth — is now supported (was a named rejection). It flattens **recursively**: the outer table expands to N copies, each holding M copies of the inner (and deeper), with sequential offsets. Every level's 1-based index rides in the leaf name, one `(index)` segment per `OCCURS` level, matching the single-level style — e.g. `LINE OCCURS 3` over `ITEM OCCURS 4` over `CODE PIC X(2)` gives `LINE(1)-ITEM(1)-CODE`@0 … `LINE(3)-ITEM(4)-CODE`@22, a 3×4×2 = 24-byte record. The outer element's stride is the full byte size of one fully-expanded inner element.
+- Implementation: `ComputeOffsets` already recursed and multiplied correctly (nested offset math was never the gap). The flattening pass was generalized — `Flatten`/`EmitIndexedLeaves` are replaced by a single compositional `EmitSubtree` that carries an accumulated byte-shift and name-prefix, so an OCCURS level expands into indexed copies and recurses, and an inner OCCURS expands in turn. `RejectNestedOccurs` (which only ever caught fixed-in-fixed nesting) is removed.
+- The checked overflow guard in `ComputeOffsets` multiplies across every nesting level, so a pathological product (e.g. `OCCURS 100000` inside `OCCURS 100000`) fails loud rather than wrapping.
+- Still rejected, unchanged, each with its own named error: an `OCCURS … DEPENDING ON` table nested inside another `OCCURS`, and any `OCCURS` (fixed or ODO) nested inside an ODO table — only *fixed*-count nesting is in scope; any variable-length nesting stays gated (enforced by `ValidateAndFindOdos`).
+- Validated against GnuCOBOL (`tools/layout-oracle`, `cobc -std=mvs`): 4/4 nested fixtures (2-level, 3-level, mixed group + trailing field, and COMP-3-in-nested) agree exactly, 0 disagreements. Single-level `OCCURS` output is byte-identical (dedicated regression test).
+
+## Unreleased — multiple ODO tables + `OCCURS 0 TO n`
+
+- `OCCURS … DEPENDING ON` now handles **more than one flat ODO table per record** and a **lower bound of 0** (`OCCURS 0 TO n`, a table that may be empty). A later table's depending field sits at an offset that depends on the earlier table's count, so per record the counts are resolved **left-to-right**: fix the earlier counts, which pins the next depending field's offset, read it, continue; then decode/encode against the fully-resolved layout. A count of 0 makes a table contribute no fields, with everything after it shifting to the table's start. Validated by round-trip (Latin-1 + EBCDIC, delimited + undelimited) and cross-checked against GnuCOBOL's `LENGTH OF` at several count combinations.
+- `ParsedCopybook` now exposes `Odos` (one `OdoInfo` per table, in source order); `Odo` remains as a first-table convenience. `BuildConcreteLayout` gains an `IReadOnlyList<int> counts` overload (a partial list lays the uncovered tables out at their minimum — this is what drives left-to-right resolution).
+- Still rejected, each with its own named error: an ODO table nested inside another `OCCURS`, an `OCCURS` (fixed or ODO) nested inside an ODO table, and a depending field defined after its table or absent. The Integration Studio JSON action surface still rejects any ODO copybook loudly (its flat spec is static).
+
 ## 1.1.0 — fixed-count OCCURS
 
 - Fixed-count `OCCURS` is now a supported feature rather than a blanket rejection. An `OCCURS n TIMES` item (`TIMES` optional) — an elementary field or a whole group — is expanded into `n` 1-indexed leaf fields with sequentially computed offsets, one full iteration's worth of bytes apart. This keeps the flat `{Name, Start, Len, Type, …}` model every consumer (`FlatFileCodec`, the JSON contract, `OutSystemsPreview`, the Integration Studio actions) already runs on, rather than introducing a parallel nested/array shape.
