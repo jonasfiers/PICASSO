@@ -12,9 +12,10 @@ namespace Picasso.Core.Tests;
 /// one token at a time, producing a wrong-but-plausible DISPLAY-sized layout, and
 /// COMP-1/COMP-2 (which carry no PIC) made the whole field vanish and shifted every
 /// following offset. Binary COMP/COMP-4/COMP-5/BINARY and PACKED-DECIMAL are now
-/// SUPPORTED and no longer appear here — see <see cref="BinaryTests"/>; what stays
-/// rejected is float (COMP-1/COMP-2), the Micro Focus COMP-6/COMP-X, and the
-/// pointer/index/alignment/DBCS family.
+/// SUPPORTED and no longer appear here — see <see cref="BinaryTests"/>. SYNC /
+/// SYNCHRONIZED alignment is likewise now SUPPORTED (slack padding before a binary
+/// item) and has moved to <see cref="SyncTests"/>; what stays rejected is float
+/// (COMP-1/COMP-2), the Micro Focus COMP-6/COMP-X, and the pointer/index/DBCS family.
 /// </summary>
 public class CopybookParserUsageRejectionTests
 {
@@ -37,8 +38,6 @@ public class CopybookParserUsageRejectionTests
     [InlineData("POINTER-64", "POINTER-64")]
     [InlineData("PROCEDURE-POINTER", "PROCEDURE-POINTER")]
     [InlineData("FUNCTION-POINTER", "FUNCTION-POINTER")]
-    [InlineData("SYNC", "SYNC")]
-    [InlineData("SYNCHRONIZED", "SYNC")]
     [InlineData("NATIONAL", "NATIONAL")]
     [InlineData("DISPLAY-1", "DISPLAY-1")]
     [InlineData("UTF-8", "UTF-8")]
