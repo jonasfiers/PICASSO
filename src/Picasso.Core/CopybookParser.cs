@@ -133,19 +133,28 @@ public static class CopybookParser
     /// </summary>
     private static ParsedCopybook FinalizeRecord(CopybookNode root, bool rootIsSynthetic)
     {
+        // A group's USAGE is inherited by every subordinate elementary item that
+        // states none of its own (standard COBOL). Push it down NOW — before any
+        // offset is computed — so a field that inherits COMP-3/Binary is sized by
+        // its packed/binary width, not the DISPLAY default it was first built with.
+        // Must run before RejectSyncInOccurs (which inspects Field.Type) and
+        // ComputeOffsets (which reads Field.Len).
+        InheritGroupUsage(root, DeclaredUsage.None);
+
         RejectNestedOccurs(root, insideOccurs: false);
+        RejectSyncInOccurs(root, insideOccurs: false);
 
         // Locate the (at most one) OCCURS ... DEPENDING ON table and validate its
         // structural preconditions before any offset is computed. More than one,
         // an ODO nested in another OCCURS, or an OCCURS nested inside the ODO's
         // own subtree are each rejected loudly — the common single-ODO case is
         // the only variable-length shape supported.
-        var odoNode = ValidateAndFindOdo(root);
+        var odoNodes = ValidateAndFindOdos(root);
 
-        // For an ODO copybook the ODO table is expanded to its MINIMUM count for
-        // the representative static layout below; the authoritative per-record
+        // For an ODO copybook every ODO table is expanded to its MINIMUM count
+        // for the representative static layout below; the authoritative per-record
         // layout is rebuilt at decode time by BuildConcreteLayout.
-        if (odoNode != null)
+        foreach (var odoNode in odoNodes)
             odoNode.OccursCount = odoNode.OdoMin;
 
         ComputeOffsets(root, 0);
@@ -163,51 +172,48 @@ public static class CopybookParser
                 $"Record '{root.Name}' defines no elementary fields with storage — it would be zero bytes. " +
                 "A layout needs at least one PIC field.");
 
-        OdoInfo? odo = null;
-        if (odoNode != null)
-            odo = BuildOdoInfo(odoNode, flat);
+        // One OdoInfo per table, in source order, so the codec can resolve the
+        // occurrence counts left-to-right (a later table's dep field offset
+        // depends on earlier tables' counts).
+        IReadOnlyList<OdoInfo>? odos = null;
+        if (odoNodes.Count > 0)
+            odos = odoNodes.Select(n => BuildOdoInfo(n, flat)).ToList();
 
-        return new ParsedCopybook(root, flat, rootIsSynthetic, odo);
+        return new ParsedCopybook(root, flat, rootIsSynthetic, odos);
     }
 
     /// <summary>
-    /// Finds the single OCCURS ... DEPENDING ON table in the tree and enforces
-    /// the "common case only" scope, loudly. Returns null for an ordinary fixed
-    /// copybook. Rejects: two-or-more ODO tables; an ODO table nested inside
-    /// another OCCURS (fixed or ODO); and any OCCURS (fixed or ODO) nested inside
-    /// the ODO table's own subtree — each a shape PICASSO does not model.
+    /// Finds every OCCURS ... DEPENDING ON table in the tree, in source order,
+    /// and enforces the supported scope loudly. Returns an empty list for an
+    /// ordinary fixed copybook. Multiple flat ODO tables per record ARE
+    /// supported (resolved left-to-right at decode time). Still rejected, per
+    /// table: an ODO table nested inside another OCCURS (fixed or ODO), and any
+    /// OCCURS (fixed or ODO) nested inside an ODO table's own subtree — each a
+    /// shape PICASSO does not model.
     /// </summary>
-    private static CopybookNode? ValidateAndFindOdo(CopybookNode root)
+    private static List<CopybookNode> ValidateAndFindOdos(CopybookNode root)
     {
         var odoNodes = new List<CopybookNode>();
         CollectOdo(root, odoNodes);
 
-        if (odoNodes.Count == 0)
-            return null;
+        foreach (var odo in odoNodes)
+        {
+            // The ODO table must not sit inside any other OCCURS (fixed or ODO):
+            // its offset would itself be index-dependent, which the read-once
+            // per-table count model cannot express.
+            if (IsNestedUnderOccurs(root, odo, insideOccurs: false))
+                throw new FormatException(
+                    $"OCCURS ... DEPENDING ON table '{odo.Name}' is nested inside another OCCURS. A variable-length " +
+                    "table nested in a repeating group is not supported; only flat, top-level ODO tables are.");
 
-        if (odoNodes.Count > 1)
-            throw new FormatException(
-                $"More than one OCCURS ... DEPENDING ON table in this record ('{odoNodes[0].Name}' and " +
-                $"'{odoNodes[1].Name}'). Only a single variable-length table per record is supported — two " +
-                "would make the record's shape depend on two counts at once, which this codec does not model.");
+            // No OCCURS of any kind may appear inside the ODO table's subtree — a
+            // table-of-tables where the outer table is variable is out of scope
+            // and rejected rather than half-modelled.
+            foreach (var child in odo.Children)
+                RejectAnyOccursInSubtree(child, odo.Name);
+        }
 
-        var odo = odoNodes[0];
-
-        // The ODO table must not sit inside any other OCCURS (fixed or ODO): its
-        // offset would itself be data- or index-dependent, which the single,
-        // read-once count model cannot express.
-        if (IsNestedUnderOccurs(root, odo, insideOccurs: false))
-            throw new FormatException(
-                $"OCCURS ... DEPENDING ON table '{odo.Name}' is nested inside another OCCURS. A variable-length " +
-                "table nested in a repeating group is not supported; only a single top-level ODO table is.");
-
-        // No OCCURS of any kind may appear inside the ODO table's subtree — a
-        // table-of-tables where the outer table is variable is out of scope and
-        // rejected rather than half-modelled.
-        foreach (var child in odo.Children)
-            RejectAnyOccursInSubtree(child, odo.Name);
-
-        return odo;
+        return odoNodes;
     }
 
     private static void CollectOdo(CopybookNode node, List<CopybookNode> into)
@@ -285,36 +291,57 @@ public static class CopybookParser
     /// independent copy, so previously-returned layouts are never disturbed.
     /// </summary>
     public static List<FieldSpec> BuildConcreteLayout(ParsedCopybook parsed, int count)
+        => BuildConcreteLayout(parsed, new[] { count });
+
+    /// <summary>
+    /// Builds the concrete flat layout for a variable-length copybook at given
+    /// occurrence counts — one per ODO table, in source order. Each named table
+    /// is expanded to its count of 1-indexed copies (TAB(1)…TAB(count)) and
+    /// every trailing field's offset cascades past all the copies.
+    ///
+    /// <paramref name="counts"/> may be SHORTER than the number of tables: the
+    /// tables it does not cover are laid out at their minimum count. That is what
+    /// makes left-to-right resolution possible — build a partial layout with the
+    /// tables resolved so far, read the next table's depending field at its now-
+    /// known offset, then extend the list. A count of 0 (OCCURS 0 TO n) makes a
+    /// table contribute no fields, with everything after it shifting to its start.
+    ///
+    /// Reuses the same offset and flatten passes the fixed path uses, by setting
+    /// each ODO node's transient count. Not re-entrant across threads (it mutates
+    /// the shared tree's transient offsets), but every returned FieldSpec is an
+    /// independent copy, so previously-returned layouts are never disturbed.
+    /// </summary>
+    public static List<FieldSpec> BuildConcreteLayout(ParsedCopybook parsed, IReadOnlyList<int> counts)
     {
         if (!parsed.IsVariableLength)
             throw new InvalidOperationException(
                 "BuildConcreteLayout is only meaningful for a variable-length (ODO) copybook.");
-        if (count < 1)
-            throw new ArgumentOutOfRangeException(nameof(count), count,
-                "Occurrence count must be at least 1.");
 
-        var odoNode = FindOdo(parsed.Root)
-            ?? throw new InvalidOperationException("Variable-length copybook has no ODO node in its tree.");
+        var odoNodes = new List<CopybookNode>();
+        CollectOdo(parsed.Root, odoNodes);
+        if (odoNodes.Count == 0)
+            throw new InvalidOperationException("Variable-length copybook has no ODO node in its tree.");
+        if (counts.Count > odoNodes.Count)
+            throw new ArgumentException(
+                $"{counts.Count} counts supplied for {odoNodes.Count} ODO table(s).", nameof(counts));
 
-        odoNode.OccursCount = count;
+        for (var j = 0; j < odoNodes.Count; j++)
+        {
+            // Tables not covered by the (possibly partial) counts list default to
+            // their minimum — they sit after the table currently being resolved,
+            // so their transient count cannot affect an earlier dep field offset.
+            var c = j < counts.Count ? counts[j] : odoNodes[j].OdoMin;
+            if (c < 0)
+                throw new ArgumentOutOfRangeException(nameof(counts), c,
+                    "Occurrence count must be zero or greater.");
+            odoNodes[j].OccursCount = c;
+        }
+
         ComputeOffsets(parsed.Root, 0);
 
         var flat = new List<FieldSpec>();
         Flatten(parsed.Root, flat);
         return flat;
-    }
-
-    private static CopybookNode? FindOdo(CopybookNode node)
-    {
-        if (node.IsOdoTable)
-            return node;
-        foreach (var child in node.Children)
-        {
-            var found = FindOdo(child);
-            if (found != null)
-                return found;
-        }
-        return null;
     }
 
     /// <summary>
@@ -525,6 +552,17 @@ public static class CopybookParser
         public FieldSpec? Field;
         public int OccursCount = 1;
         public string? RedefinesTarget;
+        public bool Synchronized;
+
+        // The inheritable USAGE this entry stated in its own clause (None if it
+        // stated none), plus the ingredients needed to REBUILD an elementary
+        // FieldSpec if it turns out to inherit a group's USAGE. Captured for both
+        // group and elementary items — a group carries USAGE but no PIC, and its
+        // usage must reach subordinate elementary items that state none.
+        public DeclaredUsage DeclaredUsage = DeclaredUsage.None;
+        public PicSpec? Pic;
+        public bool SignSeparate;
+        public bool SignLeading;
 
         // Variable-length OCCURS (ODO). IsOdo marks this statement as the table;
         // the bounds and the depending-field name are carried onto the node.
@@ -564,8 +602,10 @@ public static class CopybookParser
         string? pictureText = null;
         var comp3 = false;
         var binary = false;
+        var sawDisplay = false;
         var signSeparate = false;
         var signLeading = false;
+        var synchronized = false;
         var occursCount = 1;
         string? redefinesTarget = null;
         var isOdo = false;
@@ -670,10 +710,10 @@ public static class CopybookParser
                         odoDependsOn = tokens[i];
                         i += 1;
 
-                        if (odoMin < 1)
+                        if (odoMin < 0)
                             throw new FormatException(
-                                $"OCCURS ... DEPENDING ON lower bound must be at least 1: field '{name}' " +
-                                $"in \"{statement}\".");
+                                $"OCCURS ... DEPENDING ON lower bound cannot be negative: field '{name}' " +
+                                $"in \"{statement}\". (0 is allowed — OCCURS 0 TO n means the table may be empty.)");
                         if (odoMax < odoMin)
                             throw new FormatException(
                                 $"OCCURS ... DEPENDING ON upper bound ({odoMax}) is below the lower bound " +
@@ -751,6 +791,21 @@ public static class CopybookParser
                     i += 1;
                     break;
 
+                // Explicit USAGE DISPLAY. DISPLAY is the default sizing (one byte
+                // per digit/char), so on its own it is a no-op that already fell
+                // through the default skip. It is captured now for ONE reason: a
+                // group's USAGE is inherited by subordinate elementary items, and an
+                // explicit DISPLAY on a child (or an inner group) must OVERRIDE an
+                // inherited COMP-3/Binary from an outer group — "child's own usage
+                // wins". Without capturing it, the inheritance pass could not tell an
+                // explicit DISPLAY (override) from no usage clause at all (inherit).
+                // DISPLAY-1 (DBCS) and UTF-8 are distinct tokens handled above and
+                // never match here.
+                case "DISPLAY":
+                    sawDisplay = true;
+                    i += 1;
+                    break;
+
                 // Unsupported USAGE clauses. Each changes a field's physical byte
                 // width away from the DISPLAY (one byte per digit/char) sizing this
                 // parser computes — a 4- or 8-byte float, a Micro Focus dialect
@@ -792,9 +847,20 @@ public static class CopybookParser
                 // used to drop the field entirely and shift every following offset.
                 case "OBJECT":
                     throw UnsupportedUsage("OBJECT REFERENCE", "object reference", name, statement);
+
+                // SYNCHRONIZED / SYNC aligns a BINARY item to its natural byte
+                // boundary by inserting slack bytes before it (handled in
+                // ComputeOffsets, which knows the running offset). It changes only
+                // WHERE a field sits, never HOW its value is read, so it is a flag,
+                // not a value transform. On a non-binary item (DISPLAY, COMP-3,
+                // Text/edited, a group) it is a no-op in IBM COBOL — carried anyway
+                // and simply produces no padding. Any trailing LEFT/RIGHT qualifier
+                // falls through the default one-token skip below.
                 case "SYNC":
                 case "SYNCHRONIZED":
-                    throw UnsupportedUsage("SYNC", "synchronized/aligned", name, statement);
+                    synchronized = true;
+                    i += 1;
+                    break;
                 case "NATIONAL":
                     throw UnsupportedUsage("NATIONAL", "national (double-byte)", name, statement);
                 // DBCS (DISPLAY-1) and UTF-8 give a character a physical width other
@@ -814,9 +880,22 @@ public static class CopybookParser
             }
         }
 
+        // The inheritable USAGE this entry states in its own clause. COMP-3 and the
+        // binary forms take precedence over an explicit DISPLAY (a nonsensical
+        // combination would be malformed source anyway); None means the entry
+        // stated no usage and will inherit any ancestor group's. This is captured
+        // for a group item too (which carries no PIC), so its usage can flow down.
+        var declaredUsage =
+            comp3 ? DeclaredUsage.Comp3 :
+            binary ? DeclaredUsage.Binary :
+            sawDisplay ? DeclaredUsage.Display :
+            DeclaredUsage.None;
+
+        PicSpec? pic = pictureText != null ? Pic.ParsePicClause(pictureText) : null;
+
         FieldSpec? field = null;
-        if (pictureText != null)
-            field = BuildFieldSpec(name, Pic.ParsePicClause(pictureText), comp3, binary, signSeparate, signLeading);
+        if (pic != null)
+            field = BuildFieldSpec(name, pic, comp3, binary, signSeparate, signLeading);
 
         return new ParsedStatement
         {
@@ -825,6 +904,11 @@ public static class CopybookParser
             Field = field,
             OccursCount = occursCount,
             RedefinesTarget = redefinesTarget,
+            Synchronized = synchronized,
+            DeclaredUsage = declaredUsage,
+            Pic = pic,
+            SignSeparate = signSeparate,
+            SignLeading = signLeading,
             IsOdo = isOdo,
             OdoMin = odoMin,
             OdoMax = odoMax,
@@ -846,6 +930,68 @@ public static class CopybookParser
             "DISPLAY and COMP-3 only; a field with this usage has a different physical width this parser does " +
             "not compute, and silently skipping the clause would mis-size it. See README's " +
             "'Not supported (v1)' section.");
+
+    /// <summary>
+    /// Pushes a group's USAGE down onto the subordinate elementary items that
+    /// state none of their own — standard COBOL, which the flat parse pass cannot
+    /// do because it builds each elementary <see cref="FieldSpec"/> in isolation,
+    /// before its ancestor groups are known. Runs top-down once the tree is
+    /// assembled:
+    ///
+    /// <list type="bullet">
+    /// <item><paramref name="inherited"/> is the effective USAGE flowing in from
+    /// the nearest enclosing group that specified one (<see cref="DeclaredUsage.None"/>
+    /// at the record root).</item>
+    /// <item>The usage this node contributes to its subtree is its OWN declared
+    /// usage if it stated one, else the inherited usage — so a child's own usage
+    /// overrides an inherited one, and an inner group's usage overrides an outer
+    /// group's for its subtree (nearest ancestor wins).</item>
+    /// <item>An elementary item that stated NO usage and inherits COMP-3 or Binary
+    /// gets its <see cref="FieldSpec"/> rebuilt from its retained PICTURE with that
+    /// usage — the only case whose first-built field (a DISPLAY default) is wrong.
+    /// An inherited DISPLAY/None is a no-op (DISPLAY is already the default), and an
+    /// elementary item with its OWN usage keeps the field it was built with.</item>
+    /// </list>
+    ///
+    /// If an inherited usage is illegal for the child's picture (e.g. group COMP-3
+    /// over a PIC X child — a contradiction COBOL itself rejects), the rebuild goes
+    /// through the same <see cref="BuildFieldSpec"/> guards and fails loud, never a
+    /// silent mis-size. A group carrying an UNSUPPORTED usage (COMP-1, POINTER, …)
+    /// never reaches here: <see cref="ParseStatement"/> already rejected it at the
+    /// group's own statement.
+    /// </summary>
+    private static void InheritGroupUsage(CopybookNode node, DeclaredUsage inherited)
+    {
+        // The usage this node passes on: its own if declared, else what it inherited.
+        var effective = node.DeclaredUsage != DeclaredUsage.None ? node.DeclaredUsage : inherited;
+
+        if (node.IsGroup)
+        {
+            foreach (var child in node.Children)
+                InheritGroupUsage(child, effective);
+            return;
+        }
+
+        // Elementary item. Only when it declared NO usage of its own AND inherits a
+        // non-DISPLAY usage is its first-built (DISPLAY-sized) FieldSpec wrong and in
+        // need of rebuilding. Its own usage, or an inherited DISPLAY/None, leaves the
+        // already-correct field untouched — keeping every non-group-USAGE layout
+        // byte-identical to before this feature.
+        if (node.DeclaredUsage == DeclaredUsage.None
+            && (inherited == DeclaredUsage.Comp3 || inherited == DeclaredUsage.Binary))
+        {
+            // An elementary node always has a PIC here: a PIC-less elementary would
+            // be a group. Rebuild from the retained picture with the inherited usage,
+            // preserving the item's own SIGN flags.
+            node.Field = BuildFieldSpec(
+                node.Name,
+                node.DeclaredPic!,
+                comp3: inherited == DeclaredUsage.Comp3,
+                binary: inherited == DeclaredUsage.Binary,
+                node.SignSeparate,
+                node.SignLeading);
+        }
+    }
 
     private static FieldSpec BuildFieldSpec(string name, PicSpec pic, bool comp3, bool binary, bool signSeparate, bool signLeading)
     {
@@ -1007,6 +1153,11 @@ public static class CopybookParser
                 Field = parsed.Field,
                 OccursCount = parsed.OccursCount,
                 RedefinesTarget = parsed.RedefinesTarget,
+                Synchronized = parsed.Synchronized,
+                DeclaredUsage = parsed.DeclaredUsage,
+                DeclaredPic = parsed.Pic,
+                SignSeparate = parsed.SignSeparate,
+                SignLeading = parsed.SignLeading,
                 IsOdoTable = parsed.IsOdo,
                 OdoMin = parsed.OdoMin,
                 OdoMax = parsed.OdoMax,
@@ -1092,6 +1243,30 @@ public static class CopybookParser
     }
 
     /// <summary>
+    /// Rejects a SYNCHRONIZED binary item that occurs, or sits inside an OCCURS
+    /// table (fixed or ODO). Per-occurrence alignment adds trailing-element slack
+    /// rules — a table's element stride must stay a multiple of the SYNC item's
+    /// boundary across every occurrence — that this codec deliberately does not
+    /// model. The flat corpus SYNC files never hit this; a table with a SYNC
+    /// binary inside fails loud rather than being silently mis-aligned. SYNC on a
+    /// non-binary item is a no-op and is never rejected, inside a table or not.
+    /// </summary>
+    private static void RejectSyncInOccurs(CopybookNode node, bool insideOccurs)
+    {
+        var itemRepeats = node.OccursCount > 1 || node.IsOdoTable;
+        if (node.Synchronized && node.Field?.Type == FieldType.Binary && (insideOccurs || itemRepeats))
+            throw new FormatException(
+                $"SYNCHRONIZED (SYNC) alignment on binary field '{node.Name}' inside an OCCURS table is not " +
+                "supported: per-occurrence alignment adds trailing-element slack rules this codec does not " +
+                "model. A SYNC binary item must sit outside any OCCURS. (SYNC on a flat, non-repeating binary " +
+                "item is supported.)");
+
+        var nowInside = insideOccurs || itemRepeats;
+        foreach (var child in node.Children)
+            RejectSyncInOccurs(child, nowInside);
+    }
+
+    /// <summary>
     /// Depth-first running byte counter. An OCCURS item's span is its single
     /// iteration's length times its repeat count: the children (or the elementary
     /// field) are laid out once, then the whole item is multiplied so that every
@@ -1152,8 +1327,25 @@ public static class CopybookParser
         }
         else
         {
-            node.Field!.Start = startOffset;
-            oneIterationLen = node.Field.Len;
+            // A SYNCHRONIZED binary item is aligned to its natural byte boundary
+            // (its width: 2/4/8) by padding the running offset up to the next
+            // multiple of that width. The slack sits BEFORE the item and inside
+            // this node's span, so the parent's running offset advances past both
+            // the padding and the item. Recomputed here on every pass (an ODO
+            // record's SYNC field can start at a different offset per count), and
+            // materialized into a synthetic FILLER leaf by Flatten. Non-binary
+            // SYNC, and any non-SYNC item, get zero slack — a true no-op.
+            var slack = 0;
+            if (node.Synchronized && node.Field!.Type == FieldType.Binary)
+            {
+                var width = node.Field.Len; // 2, 4, or 8
+                var remainder = startOffset % width;
+                if (remainder != 0)
+                    slack = width - remainder;
+            }
+            node.SyncSlack = slack;
+            node.Field!.Start = startOffset + slack;
+            oneIterationLen = slack + node.Field.Len;
         }
 
         node.Start = startOffset;
@@ -1179,6 +1371,14 @@ public static class CopybookParser
         // a decode and an encode at the same count therefore agree on field keys.
         if (node.OccursCount > 1 || node.IsOdoTable)
         {
+            // An ODO table resolved to 0 occurrences (OCCURS 0 TO n, count 0)
+            // contributes no fields at all; everything after it has already been
+            // laid out starting at this table's offset. Return before the
+            // division below (node.Len is 0 here, so oneIterationLen would divide
+            // by zero).
+            if (node.OccursCount == 0)
+                return;
+
             // One OCCURS item -> OccursCount indexed copies. COBOL tables are
             // 1-indexed, so copies run (1)..(n). Nested OCCURS is rejected before
             // we get here, so an OCCURS subtree contains no further OCCURS and one
@@ -1212,6 +1412,27 @@ public static class CopybookParser
         }
         else
         {
+            // A SYNC binary item that needed alignment carries slack bytes before
+            // it. Emit them as a synthetic FILLER leaf so the flat layout stays
+            // contiguous (no gaps) — decode captures the padding and encode emits
+            // it, so a SYNC record round-trips byte-for-byte with no codec change.
+            // A SYNC binary never occurs (rejected upstream), so slack only ever
+            // reaches this non-OCCURS leaf branch. The name embeds the slack's
+            // start offset, and '-' is legal in a COBOL identifier but a real field
+            // would never be named this — a collision is not a correctness risk
+            // anyway, since fillers carry passthrough bytes, not decoded values.
+            if (node.SyncSlack > 0)
+            {
+                var slackStart = node.Field!.Start - node.SyncSlack;
+                into.Add(new FieldSpec
+                {
+                    Name = $"FILLER-SYNC-{slackStart}",
+                    Start = slackStart,
+                    Len = node.SyncSlack,
+                    Type = FieldType.Text,
+                });
+            }
+
             // A copy, not the tree's own FieldSpec: BuildConcreteLayout recomputes
             // offsets on the shared tree at different counts, and a returned layout
             // must never be mutated retroactively by a later call.
