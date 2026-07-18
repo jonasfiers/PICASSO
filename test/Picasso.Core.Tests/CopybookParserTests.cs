@@ -820,4 +820,36 @@ public class CopybookParserTests
         Assert.Contains("'A'", ex.Message);
         Assert.Contains("'B'", ex.Message);
     }
+
+    [Theory]
+    [InlineData("COMPUTATIONAL3")] // dropped hyphen
+    [InlineData("COMP-0")]         // no such usage
+    [InlineData("COMP-7")]         // no such usage
+    public void UnrecognizedComputationalUsageFailsLoudly(string usage)
+    {
+        // A mistyped or unsupported COMPUTATIONAL usage changes a field's physical
+        // width. Silently skipping it (the old default) left the field mis-sized as
+        // DISPLAY with no error — a silent miscompute. It must fail loudly.
+        var source = $"       01 REC.\n          05 A PIC 9(4) {usage}.\n";
+        var ex = Assert.Throws<FormatException>(() => CopybookParser.Parse(source));
+        Assert.Contains("COMPUTATIONAL usage", ex.Message);
+        Assert.Contains(usage, ex.Message);
+    }
+
+    [Fact]
+    public void KnownUsagesAndValueLiteralsAreNotFalselyRejected()
+    {
+        // Guard against over-rejection: a valid COMP-4 must still parse, and a
+        // multi-word VALUE string literal — even one that contains the bare word
+        // "COMP" — must not trip the computational-usage check (it requires trailing
+        // digits, so a plain word in a literal never matches).
+        var source =
+            "       01 REC.\n" +
+            "          05 A PIC S9(4) COMP-4.\n" +
+            "          05 B PIC X(20) VALUE 'HELLO WORLD FROM COMP'.\n";
+        var parsed = CopybookParser.Parse(source);
+        Assert.Equal(new[] { "A", "B" }, parsed.Flat.Select(f => f.Name));
+        Assert.Equal(2, parsed.Flat[0].Len);   // COMP-4, 4 digits → 2 bytes
+        Assert.Equal(20, parsed.Flat[1].Len);
+    }
 }

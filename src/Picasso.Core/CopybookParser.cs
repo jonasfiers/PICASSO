@@ -367,6 +367,17 @@ public static class CopybookParser
     private static readonly Regex FixedFormatSequenceNumber =
         new Regex(@"^\d{6}", RegexOptions.Compiled);
 
+    /// <summary>
+    /// A computational-shaped usage token that reached the clause-parser's default
+    /// case, i.e. was NOT one of the recognized COMP forms — COMPUTATIONAL3 (dropped
+    /// hyphen), COMP-0, COMP-7, etc. Matched against the already-upper-cased token.
+    /// The recognized/rejected forms (COMP, COMP-3/4/5, COMP-1/2/6/X, COMPUTATIONAL-n)
+    /// all hit explicit switch cases and never reach the default, so any COMP-N here
+    /// is an unrecognized usage that would change the field width if honored.
+    /// </summary>
+    private static readonly Regex UnknownComputationalUsage =
+        new Regex(@"^(COMP|COMPUTATIONAL)-?[0-9]+$", RegexOptions.Compiled);
+
     /// <summary>Columns 8-72 of a fixed-format line, once columns 1-6 are gone.</summary>
     private const int FixedFormatCodeLength = 66;
 
@@ -1115,8 +1126,28 @@ public static class CopybookParser
                     throw UnsupportedUsage("UTF-8", "UTF-8", name, statement);
 
                 default:
-                    // Unrecognized clause (e.g. VALUE, JUSTIFIED) — skip
-                    // one token at a time; out of scope for v1.
+                    // A token we don't recognize. Most are harmless no-storage clause
+                    // words — VALUE and its literal, JUSTIFIED, BLANK WHEN ZERO,
+                    // INDEXED BY … — that do NOT change the byte layout, so they are
+                    // still skipped one token at a time (rejecting them would break
+                    // valid copybooks, and a multi-word VALUE string literal splits
+                    // into arbitrary word tokens here).
+                    //
+                    // The exception is a computational-shaped usage we didn't match
+                    // above — COMPUTATIONAL3 (a missing hyphen), COMP-0, COMP-7. Those
+                    // WOULD change a field's physical width, and silently skipping one
+                    // leaves the field mis-sized as DISPLAY with no error — a silent
+                    // miscompute, the exact failure mode this parser exists to prevent.
+                    // (The supported/rejected COMP forms — COMP-3/4/5, COMP-1/2/6/X,
+                    // BINARY, PACKED-DECIMAL — all match explicit cases above and never
+                    // reach here, so any COMP-N arriving in the default is unrecognized.)
+                    if (UnknownComputationalUsage.IsMatch(token))
+                        throw new FormatException(
+                            $"Unrecognized COMPUTATIONAL usage '{tokens[i]}' on field '{name}' in " +
+                            $"\"{statement}\". Supported binary usages are COMP / COMP-4 / COMP-5 / BINARY " +
+                            $"and COMP-3 / PACKED-DECIMAL (COMP-1/COMP-2 float are rejected explicitly). A " +
+                            $"mistyped usage (e.g. a dropped hyphen) must not be silently ignored — the " +
+                            $"field would be mis-sized.");
                     i += 1;
                     break;
             }
