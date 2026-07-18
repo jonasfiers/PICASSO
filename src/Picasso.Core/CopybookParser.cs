@@ -351,6 +351,10 @@ public static class CopybookParser
     /// identifies the line as fixed-format on its own, with no mode flag needed.
     /// Detection is per line, so a file may mix both forms.
     /// </summary>
+    /// <summary>An EXEC SQL ... END-EXEC precompiler block (DB2 DCLGEN). No storage.</summary>
+    private static readonly Regex ExecSqlBlock =
+        new Regex(@"EXEC\s+SQL\b.*?\bEND-EXEC", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.Singleline);
+
     private static readonly Regex FixedFormatSequenceNumber =
         new Regex(@"^\d{6}", RegexOptions.Compiled);
 
@@ -384,6 +388,14 @@ public static class CopybookParser
         // stray token and falsely rejects an otherwise valid layout. It never
         // appears in real COBOL source, so removing every occurrence is safe.
         source = source.Replace("\u001A", "");
+
+        // Remove EXEC SQL ... END-EXEC precompiler blocks. A DB2 DCLGEN copybook
+        // carries one (an SQL DECLARE ... TABLE) directly above its 01 host-variable
+        // structure; it is a precompiler directive with NO COBOL storage, but left in
+        // place its SQL tokens ("EXEC", "(", type names) falsely reject the copybook.
+        // The 01 structure below is a normal record layout. Span-wise, case-insensitive,
+        // across lines (a DCLGEN block spans many lines).
+        source = ExecSqlBlock.Replace(source, " ");
 
         var sb = new StringBuilder();
         foreach (var rawLine in source.Replace("\r\n", "\n").Split('\n'))

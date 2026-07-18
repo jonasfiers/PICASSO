@@ -722,4 +722,26 @@ public class CopybookParserTests
         Assert.Equal(new[] { "A", "B" }, parsed.Flat.Select(f => f.Name));
         Assert.Equal(7, parsed.Flat.Max(f => f.Start + f.Len));
     }
+
+    [Fact]
+    public void ExecSqlDclgenBlockIsSkipped()
+    {
+        // A DB2 DCLGEN copybook: an EXEC SQL DECLARE ... TABLE ... END-EXEC block
+        // (no COBOL storage) sits above the 01 host-variable structure. The block is
+        // skipped; the structure parses normally.
+        var source =
+            "       EXEC SQL DECLARE MY.TBL TABLE\n" +
+            "       ( C1 DECIMAL(9,0) NOT NULL,\n" +
+            "         C2 CHAR(50)\n" +
+            "       ) END-EXEC.\n" +
+            "       01  DCLTBL.\n" +
+            "           10 F1 PIC S9(9) USAGE COMP-4.\n" +
+            "           10 F2 PIC X(50).\n";
+        var parsed = CopybookParser.Parse(source);
+        Assert.Equal(new[] { "F1", "F2" }, parsed.Flat.Select(f => f.Name));
+        Assert.Equal(0, parsed.Flat[0].Start);
+        Assert.Equal(4, parsed.Flat[0].Len);   // S9(9) COMP-4 = fullword
+        Assert.Equal(4, parsed.Flat[1].Start);
+        Assert.Equal(54, parsed.Flat.Max(f => f.Start + f.Len));
+    }
 }
