@@ -69,6 +69,26 @@ public sealed class CopybookNode
     /// </summary>
     public string? OdoDependsOn { get; set; }
 
+    /// <summary>
+    /// True when this item carries a SYNCHRONIZED / SYNC clause. It changes only
+    /// WHERE the item sits, never how its value is read: a SYNC <b>binary</b>
+    /// (COMP/COMP-4/COMP-5/BINARY) item is aligned to its natural 2/4/8-byte
+    /// boundary by inserting slack (padding) bytes before it, which shifts every
+    /// following field. SYNC on any non-binary item (DISPLAY, COMP-3, Text/edited,
+    /// or a group) is a documented no-op in IBM COBOL — tolerated, no padding.
+    /// Set by CopybookParser.ParseStatement; consumed by ComputeOffsets.
+    /// </summary>
+    public bool Synchronized { get; set; }
+
+    /// <summary>
+    /// The number of slack (padding) bytes ComputeOffsets inserted <b>before</b> a
+    /// SYNC binary item to align it to its byte boundary — 0 when no alignment was
+    /// needed or the item isn't a SYNC binary. Recomputed on every ComputeOffsets
+    /// pass (an ODO record's SYNC field can shift between counts), and materialized
+    /// by Flatten into a synthetic FILLER leaf so the flat layout stays contiguous.
+    /// </summary>
+    public int SyncSlack { get; set; }
+
     /// <summary>Populated by CopybookParser.ComputeOffsets.</summary>
     public int Start { get; set; }
     public int Len { get; set; }

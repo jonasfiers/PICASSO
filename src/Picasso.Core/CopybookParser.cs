@@ -134,6 +134,7 @@ public static class CopybookParser
     private static ParsedCopybook FinalizeRecord(CopybookNode root, bool rootIsSynthetic)
     {
         RejectNestedOccurs(root, insideOccurs: false);
+        RejectSyncInOccurs(root, insideOccurs: false);
 
         // Locate the (at most one) OCCURS ... DEPENDING ON table and validate its
         // structural preconditions before any offset is computed. More than one,
@@ -525,6 +526,7 @@ public static class CopybookParser
         public FieldSpec? Field;
         public int OccursCount = 1;
         public string? RedefinesTarget;
+        public bool Synchronized;
 
         // Variable-length OCCURS (ODO). IsOdo marks this statement as the table;
         // the bounds and the depending-field name are carried onto the node.
@@ -566,6 +568,7 @@ public static class CopybookParser
         var binary = false;
         var signSeparate = false;
         var signLeading = false;
+        var synchronized = false;
         var occursCount = 1;
         string? redefinesTarget = null;
         var isOdo = false;
@@ -792,9 +795,20 @@ public static class CopybookParser
                 // used to drop the field entirely and shift every following offset.
                 case "OBJECT":
                     throw UnsupportedUsage("OBJECT REFERENCE", "object reference", name, statement);
+
+                // SYNCHRONIZED / SYNC aligns a BINARY item to its natural byte
+                // boundary by inserting slack bytes before it (handled in
+                // ComputeOffsets, which knows the running offset). It changes only
+                // WHERE a field sits, never HOW its value is read, so it is a flag,
+                // not a value transform. On a non-binary item (DISPLAY, COMP-3,
+                // Text/edited, a group) it is a no-op in IBM COBOL — carried anyway
+                // and simply produces no padding. Any trailing LEFT/RIGHT qualifier
+                // falls through the default one-token skip below.
                 case "SYNC":
                 case "SYNCHRONIZED":
-                    throw UnsupportedUsage("SYNC", "synchronized/aligned", name, statement);
+                    synchronized = true;
+                    i += 1;
+                    break;
                 case "NATIONAL":
                     throw UnsupportedUsage("NATIONAL", "national (double-byte)", name, statement);
                 // DBCS (DISPLAY-1) and UTF-8 give a character a physical width other
@@ -825,6 +839,7 @@ public static class CopybookParser
             Field = field,
             OccursCount = occursCount,
             RedefinesTarget = redefinesTarget,
+            Synchronized = synchronized,
             IsOdo = isOdo,
             OdoMin = odoMin,
             OdoMax = odoMax,
@@ -1007,6 +1022,7 @@ public static class CopybookParser
                 Field = parsed.Field,
                 OccursCount = parsed.OccursCount,
                 RedefinesTarget = parsed.RedefinesTarget,
+                Synchronized = parsed.Synchronized,
                 IsOdoTable = parsed.IsOdo,
                 OdoMin = parsed.OdoMin,
                 OdoMax = parsed.OdoMax,
@@ -1092,6 +1108,30 @@ public static class CopybookParser
     }
 
     /// <summary>
+    /// Rejects a SYNCHRONIZED binary item that occurs, or sits inside an OCCURS
+    /// table (fixed or ODO). Per-occurrence alignment adds trailing-element slack
+    /// rules — a table's element stride must stay a multiple of the SYNC item's
+    /// boundary across every occurrence — that this codec deliberately does not
+    /// model. The flat corpus SYNC files never hit this; a table with a SYNC
+    /// binary inside fails loud rather than being silently mis-aligned. SYNC on a
+    /// non-binary item is a no-op and is never rejected, inside a table or not.
+    /// </summary>
+    private static void RejectSyncInOccurs(CopybookNode node, bool insideOccurs)
+    {
+        var itemRepeats = node.OccursCount > 1 || node.IsOdoTable;
+        if (node.Synchronized && node.Field?.Type == FieldType.Binary && (insideOccurs || itemRepeats))
+            throw new FormatException(
+                $"SYNCHRONIZED (SYNC) alignment on binary field '{node.Name}' inside an OCCURS table is not " +
+                "supported: per-occurrence alignment adds trailing-element slack rules this codec does not " +
+                "model. A SYNC binary item must sit outside any OCCURS. (SYNC on a flat, non-repeating binary " +
+                "item is supported.)");
+
+        var nowInside = insideOccurs || itemRepeats;
+        foreach (var child in node.Children)
+            RejectSyncInOccurs(child, nowInside);
+    }
+
+    /// <summary>
     /// Depth-first running byte counter. An OCCURS item's span is its single
     /// iteration's length times its repeat count: the children (or the elementary
     /// field) are laid out once, then the whole item is multiplied so that every
@@ -1152,8 +1192,25 @@ public static class CopybookParser
         }
         else
         {
-            node.Field!.Start = startOffset;
-            oneIterationLen = node.Field.Len;
+            // A SYNCHRONIZED binary item is aligned to its natural byte boundary
+            // (its width: 2/4/8) by padding the running offset up to the next
+            // multiple of that width. The slack sits BEFORE the item and inside
+            // this node's span, so the parent's running offset advances past both
+            // the padding and the item. Recomputed here on every pass (an ODO
+            // record's SYNC field can start at a different offset per count), and
+            // materialized into a synthetic FILLER leaf by Flatten. Non-binary
+            // SYNC, and any non-SYNC item, get zero slack — a true no-op.
+            var slack = 0;
+            if (node.Synchronized && node.Field!.Type == FieldType.Binary)
+            {
+                var width = node.Field.Len; // 2, 4, or 8
+                var remainder = startOffset % width;
+                if (remainder != 0)
+                    slack = width - remainder;
+            }
+            node.SyncSlack = slack;
+            node.Field!.Start = startOffset + slack;
+            oneIterationLen = slack + node.Field.Len;
         }
 
         node.Start = startOffset;
@@ -1212,6 +1269,27 @@ public static class CopybookParser
         }
         else
         {
+            // A SYNC binary item that needed alignment carries slack bytes before
+            // it. Emit them as a synthetic FILLER leaf so the flat layout stays
+            // contiguous (no gaps) — decode captures the padding and encode emits
+            // it, so a SYNC record round-trips byte-for-byte with no codec change.
+            // A SYNC binary never occurs (rejected upstream), so slack only ever
+            // reaches this non-OCCURS leaf branch. The name embeds the slack's
+            // start offset, and '-' is legal in a COBOL identifier but a real field
+            // would never be named this — a collision is not a correctness risk
+            // anyway, since fillers carry passthrough bytes, not decoded values.
+            if (node.SyncSlack > 0)
+            {
+                var slackStart = node.Field!.Start - node.SyncSlack;
+                into.Add(new FieldSpec
+                {
+                    Name = $"FILLER-SYNC-{slackStart}",
+                    Start = slackStart,
+                    Len = node.SyncSlack,
+                    Type = FieldType.Text,
+                });
+            }
+
             // A copy, not the tree's own FieldSpec: BuildConcreteLayout recomputes
             // offsets on the shared tree at different counts, and a returned layout
             // must never be mutated retroactively by a later call.
