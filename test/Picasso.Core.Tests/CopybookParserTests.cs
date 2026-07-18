@@ -442,16 +442,23 @@ public class CopybookParserTests
         Assert.Equal(4, canvasCount.Len);
     }
 
-    // ---- Rejections ----
+    // ---- Level-66 RENAMES: tolerated and ignored (zero storage) ----
 
-    [Theory]
-    [InlineData(66, "RENAMES")]
-    public void RejectsUnsupportedLevelNumbers(int level, string expectedInMessage)
+    [Fact]
+    public void Level66RenamesIsToleratedAndIgnored()
     {
-        var source = $"01  R.\n    05  A PIC X(3).\n    {level}  B-COND RENAMES A.\n";
-        var ex = Assert.Throws<FormatException>(() => CopybookParser.Parse(source));
-        Assert.Contains(expectedInMessage, ex.Message);
-        Assert.Contains(level.ToString(), ex.Message);
+        // A 66 RENAMES alias regroups existing bytes; it adds no storage, so it is
+        // dropped and the layout is unaffected.
+        var source =
+            "01  R.\n" +
+            "    05  A PIC X(3).\n" +
+            "    05  B PIC 9(4).\n" +
+            "    66  A-AND-B RENAMES A THRU B.\n";
+        var parsed = CopybookParser.Parse(source);
+        Assert.Equal(new[] { "A", "B" }, parsed.Flat.Select(f => f.Name));
+        Assert.Equal(0, parsed.Flat[0].Start);
+        Assert.Equal(3, parsed.Flat[1].Start);
+        Assert.Equal(7, parsed.Flat.Max(f => f.Start + f.Len));
     }
 
     // ---- Level-88 condition-names: tolerated and ignored ----

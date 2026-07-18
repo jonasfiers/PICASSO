@@ -595,14 +595,13 @@ public static class CopybookParser
         // silently dropped here (null == "skip this statement"), exactly as the
         // parser already ignores INDEXED BY / VALUE / JUSTIFIED. Its body
         // (VALUE/VALUES ARE/THRU literals) is never interpreted.
-        if (level == 88)
+        // Level 66 (RENAMES) — a NEW-NAME RENAMES ITEM-1 [THRU ITEM-2] alias that
+        // re-groups already-defined items under another name. Like level 88 it
+        // occupies ZERO new storage (it renames existing bytes), so it is tolerated
+        // and dropped: the alias itself isn't surfaced, but the byte layout is
+        // unaffected. Its body (the RENAMES/THRU operands) is never interpreted.
+        if (level == 88 || level == 66)
             return null;
-
-        // Level 66 (RENAMES) is a different construct with different semantics
-        // and stays rejected with its own named error.
-        if (level == 66)
-            throw new FormatException(
-                $"Level {level} (RENAMES) is not supported: \"{statement}\".");
 
         string? pictureText = null;
         var comp3 = false;
