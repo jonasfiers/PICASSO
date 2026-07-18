@@ -657,15 +657,23 @@ public class CopybookParserTests
     // is regression-tested next to the feature it guards.
 
     [Fact]
-    public void RejectsRedefines()
+    public void RedefinesOverlaysTargetOffset()
     {
-        // Previously silently ignored the same way: REDEFINES was skipped, so
-        // the redefining field was placed at the next free offset instead of
-        // overlapping the field it redefines, corrupting every offset after it.
-        var ex = Assert.Throws<FormatException>(() => CopybookParser.Parse(
-            "01  R.\n    05  ORIGINAL PIC X(10).\n    05  ALIASED REDEFINES ORIGINAL PIC 9(10).\n"));
-        Assert.Contains("REDEFINES", ex.Message);
-        Assert.Contains("ALIASED", ex.Message);
+        // REDEFINES is now supported: the redefining field overlays the target's
+        // bytes rather than being placed at the next free offset. Full coverage
+        // (groups, FILLER, longer/shorter redefinitions, decode round-trip, and
+        // the encode-overlap rejection) lives in RedefinesTests; this asserts the
+        // headline offset invariant right where the old rejection test stood.
+        var parsed = CopybookParser.Parse(
+            "01  R.\n    05  ORIGINAL PIC X(10).\n    05  ALIASED REDEFINES ORIGINAL PIC 9(10).\n");
+
+        var original = parsed.Flat.Single(f => f.Name == "ORIGINAL");
+        var aliased = parsed.Flat.Single(f => f.Name == "ALIASED");
+        Assert.Equal(0, original.Start);
+        Assert.Equal(0, aliased.Start);          // overlays ORIGINAL, not appended
+        Assert.Equal(10, original.Len);
+        Assert.Equal(10, aliased.Len);
+        Assert.Equal(10, parsed.Root.Len);        // record is 10 bytes, not 20
     }
 
     // ---- Corpus smoke test ----

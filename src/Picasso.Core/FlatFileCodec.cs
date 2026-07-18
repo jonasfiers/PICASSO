@@ -36,7 +36,7 @@ public static class FlatFileCodec
         RecordFormat format = RecordFormat.NewlineDelimited)
     {
         var records = new List<Dictionary<string, object>>();
-        var expectedLength = spec.Sum(f => f.Len);
+        var expectedLength = RecordLength(spec);
         foreach (var line in SplitRecords(text, expectedLength, format))
         {
             if (line.Length != expectedLength)
@@ -57,6 +57,16 @@ public static class FlatFileCodec
         CharacterEncoding encoding = CharacterEncoding.Latin1,
         RecordFormat format = RecordFormat.NewlineDelimited)
     {
+        // Encoding a layout whose fields overlap (a REDEFINES overlay) is
+        // ambiguous by construction: two names describe the same bytes, so
+        // writing one field would silently clobber the other's contribution.
+        // That is exactly the silent corruption this project forbids, so reject
+        // the whole encode loudly and up front (the overlap is a property of the
+        // layout, not of any one record). DECODE has no such problem — each
+        // overlapping field is an independent reading of the same bytes — so it
+        // stays fully supported.
+        RejectOverlappingLayout(spec);
+
         var lines = new List<string>();
         foreach (var record in records)
         {
@@ -74,6 +84,53 @@ public static class FlatFileCodec
             return string.Concat(lines);
 
         return lines.Count == 0 ? "" : string.Join("\n", lines) + "\n";
+    }
+
+    /// <summary>
+    /// The byte length of one record for this layout: the farthest byte any field
+    /// reaches, i.e. max(Start + Len). For an ordinary layout (fields tiling
+    /// [0, total) with no gaps) this equals the plain sum of lengths, so nothing
+    /// changes there. It differs only when a REDEFINES overlay makes fields share
+    /// bytes — then summing lengths would over-count the shared bytes and invent a
+    /// too-long record. Max-end is the correct, overlap-aware measure.
+    /// </summary>
+    private static int RecordLength(IReadOnlyList<FieldSpec> spec) =>
+        spec.Count == 0 ? 0 : spec.Max(f => f.Start + f.Len);
+
+    /// <summary>
+    /// Fails loudly if any two fields in the layout claim overlapping bytes — the
+    /// signature of a REDEFINES overlay. Called only on the ENCODE path: writing
+    /// overlapping fields is ambiguous (last write silently wins, corrupting the
+    /// other field's bytes), which this project refuses to do. The error names the
+    /// specific overlapping pair and their byte ranges so the cause is unmistakable.
+    /// </summary>
+    private static void RejectOverlappingLayout(IReadOnlyList<FieldSpec> spec)
+    {
+        // Sort by start, then by end. Walking left to right, keep the field that
+        // reaches farthest so far; the next field overlaps something iff it starts
+        // before that farthest end. Zero-length fields can't overlap anything and
+        // are skipped so they never falsely trip the check.
+        var ordered = spec
+            .Where(f => f.Len > 0)
+            .OrderBy(f => f.Start)
+            .ThenBy(f => f.Start + f.Len)
+            .ToList();
+
+        FieldSpec? farthest = null;
+        foreach (var f in ordered)
+        {
+            if (farthest != null && f.Start < farthest.Start + farthest.Len)
+                throw new FormatException(
+                    $"Cannot encode a layout with overlapping fields: '{farthest.Name}' " +
+                    $"(bytes {farthest.Start}-{farthest.Start + farthest.Len - 1}) and '{f.Name}' " +
+                    $"(bytes {f.Start}-{f.Start + f.Len - 1}) share bytes — a REDEFINES overlay. " +
+                    "Decoding such a layout is fine (each field is an independent reading of the same " +
+                    "bytes), but encoding is ambiguous: writing one field would silently clobber the " +
+                    "other. Encode from a layout without REDEFINES overlaps, or use decode only.");
+
+            if (farthest == null || f.Start + f.Len > farthest.Start + farthest.Len)
+                farthest = f;
+        }
     }
 
     /// <summary>Text bytes -> readable text. COMP-3 never goes through here.</summary>
