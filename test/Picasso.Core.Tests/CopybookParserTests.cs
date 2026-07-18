@@ -780,4 +780,25 @@ public class CopybookParserTests
         Assert.Equal(5, parsed.Flat[1].Start);
         Assert.Equal(8, parsed.Flat.Max(f => f.Start + f.Len));
     }
+
+    [Fact]
+    public void OffColumnStarCommentBannerIsStripped()
+    {
+        // Fixed-format comments live in column 7, but many exported copybooks leave
+        // column 7 blank and start a '*' banner in Area A (column 8). Such a banner
+        // must still be recognized as a comment; otherwise it glues onto the first
+        // real data item. Column layout below: 7 spaces, then '*' at column 8.
+        var source =
+            "       ****************************\n" +
+            "       * STORE DETAILS EXTRACT     \n" +
+            "       ****************************\n" +
+            "        03  DTAR-REC.\n" +
+            "            10 DTAR-STORE-NO PIC X(5).\n" +
+            "            10 DTAR-REGION-NO PIC 9(3).\n";
+        var parsed = CopybookParser.Parse(source);
+        Assert.Equal(new[] { "DTAR-STORE-NO", "DTAR-REGION-NO" }, parsed.Flat.Select(f => f.Name));
+        Assert.Equal(0, parsed.Flat[0].Start);
+        Assert.Equal(5, parsed.Flat[1].Start);
+        Assert.Equal(8, parsed.Flat.Max(f => f.Start + f.Len));
+    }
 }

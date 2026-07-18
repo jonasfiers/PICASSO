@@ -469,6 +469,24 @@ public static class CopybookParser
                 line = end > 7 ? line.Substring(7, end - 7) : string.Empty;
             }
 
+            // Off-column full-line comment. Fixed-format puts the '*' comment
+            // indicator in column 7, but real exported copybooks (e.g. JRecord's
+            // "cobol" sample style) routinely leave column 7 blank and start a '*'
+            // banner in Area A (column 8+). After the sequence-area handling above,
+            // check the first non-blank character: no COBOL data item can begin with
+            // '*', so a leading '*' unambiguously marks a comment line. Excludes the
+            // inline "*>" marker (handled below) and continuation lines (whose Area-B
+            // content may legitimately begin with '*', e.g. a continued edited PIC).
+            if (!continuation)
+            {
+                var t = line.TrimStart();
+                if (t.Length > 0 && t[0] == '*' && !t.StartsWith("*>", StringComparison.Ordinal))
+                {
+                    outputLines.Add(string.Empty);
+                    continue;
+                }
+            }
+
             // Separated columns-73-80 identification area on a line whose
             // columns-1-6 sequence area is BLANK (so the numeric-cols-1-6 path
             // above never fired and never truncated it). Many real fixed-format
