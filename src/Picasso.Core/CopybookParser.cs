@@ -375,10 +375,24 @@ public static class CopybookParser
     /// the compiler ignores) is truncated so it can't reach the tokenizer.
     ///
     /// A statement wrapping across several fixed-format lines needs no special
-    /// handling: SplitStatements splits on '.' across the whole document and
-    /// collapses embedded newlines. The column-7 '-' continuation indicator
-    /// (splitting a text literal with no intervening space) is an intentional
-    /// non-goal — PICASSO never parses literal content.
+    /// handling for the ordinary case: SplitStatements splits on '.' across the
+    /// whole document and collapses embedded newlines.
+    ///
+    /// The column-7 '-' continuation indicator IS handled here, before the text
+    /// reaches SplitStatements. A '-' in column 7 (0-indexed 6) marks the line as
+    /// a continuation of the preceding non-blank code line and is joined to it:
+    /// when the preceding line left an alphanumeric literal OPEN (its closing
+    /// delimiter absent), the continuation line's area B reopens the literal with a
+    /// matching delimiter and the characters after that delimiter continue the
+    /// literal — so <c>VALUE "A</c> + <c>-    "BC"</c> reconstructs the single,
+    /// properly-closed literal <c>VALUE "ABC"</c> on one logical line. When the
+    /// preceding line had no open literal, the continuation is a split word and is
+    /// concatenated directly. This is only meaningful in fixed-format (free-format
+    /// has no column-7 indicator). A continuation that cannot be reconstructed
+    /// (open literal, but area B does not reopen it with a matching delimiter) fails
+    /// loud rather than silently mis-joining. A genuinely unterminated literal with
+    /// no continuation line is untouched here and still fails loud in
+    /// SplitStatements.
     /// </summary>
     public static string StripComments(string source)
     {
@@ -397,10 +411,19 @@ public static class CopybookParser
         // across lines (a DCLGEN block spans many lines).
         source = ExecSqlBlock.Replace(source, " ");
 
-        var sb = new StringBuilder();
+        // Processed code content, one entry per physical source line (comment and
+        // blank lines become ""). A column-7 continuation line adds an empty entry
+        // of its own — its content is folded into the last real code line instead —
+        // so the 1:1 physical-line mapping is preserved.
+        var outputLines = new List<string>();
+        // Index into outputLines of the last line that carried real code; the target
+        // a continuation line is joined onto. -1 until the first code line appears.
+        var lastCodeIndex = -1;
+
         foreach (var rawLine in source.Replace("\r\n", "\n").Split('\n'))
         {
             var line = rawLine;
+            var continuation = false;
 
             if (FixedFormatSequenceNumber.IsMatch(line))
             {
@@ -411,16 +434,30 @@ public static class CopybookParser
                 // What was column 7 is now the first character.
                 if (line.Length > 0 && line[0] == '*')
                 {
-                    sb.Append('\n');
+                    outputLines.Add(string.Empty);
                     continue;
+                }
+                // Column-7 '-' continuation indicator: drop it; cols 8-72 remain.
+                if (line.Length > 0 && line[0] == '-')
+                {
+                    continuation = true;
+                    line = line.Substring(1);
                 }
             }
             // Fixed-format comment line whose sequence number is blank rather
             // than numbered: column 7 (0-indexed: 6) is '*'.
             else if (line.Length > 6 && line[6] == '*' && (line.Length == 7 || line[7] != '>'))
             {
-                sb.Append('\n');
+                outputLines.Add(string.Empty);
                 continue;
+            }
+            // Fixed-format continuation line whose sequence number is blank: column 7
+            // (0-indexed 6) is '-', with columns 1-6 blank. Keep cols 8-72 as content.
+            else if (line.Length > 6 && line[6] == '-' && IsBlankSequenceArea(line))
+            {
+                continuation = true;
+                var end = Math.Min(line.Length, CodeAreaEndColumn);
+                line = end > 7 ? line.Substring(7, end - 7) : string.Empty;
             }
 
             // Separated columns-73-80 identification area on a line whose
@@ -446,9 +483,98 @@ public static class CopybookParser
             if (commentStart >= 0)
                 line = line.Substring(0, commentStart);
 
-            sb.Append(line).Append('\n');
+            if (continuation)
+            {
+                if (lastCodeIndex < 0)
+                    throw new FormatException(
+                        "Fixed-format continuation line (column-7 '-') has no preceding code line to " +
+                        "continue. Check the copybook's column-7 indicator area.");
+
+                outputLines[lastCodeIndex] = JoinContinuation(outputLines[lastCodeIndex], line);
+                // The continuation's content now lives on lastCodeIndex; this
+                // physical line contributes nothing further.
+                outputLines.Add(string.Empty);
+                continue;
+            }
+
+            outputLines.Add(line);
+            if (line.Trim().Length > 0)
+                lastCodeIndex = outputLines.Count - 1;
         }
-        return sb.ToString();
+
+        return string.Join("\n", outputLines) + "\n";
+    }
+
+    /// <summary>
+    /// Joins a fixed-format column-7 continuation line's content onto the code
+    /// line it continues. If <paramref name="previous"/> ends with an OPEN
+    /// alphanumeric literal, <paramref name="continuationContent"/> must reopen it
+    /// with a matching delimiter in area B; the reopening delimiter is dropped and
+    /// the remaining characters continue the still-open literal (COBOL literal
+    /// continuation). Otherwise the continuation is a split word and is
+    /// concatenated directly with no separating space. An open literal that the
+    /// continuation does not reopen with a matching delimiter cannot be
+    /// reconstructed and fails loud rather than mis-joining.
+    /// </summary>
+    private static string JoinContinuation(string previous, string continuationContent)
+    {
+        var cont = continuationContent.TrimStart();
+
+        if (HasOpenLiteral(previous, out var quote))
+        {
+            if (cont.Length == 0 || cont[0] != quote)
+                throw new FormatException(
+                    $"Fixed-format literal continuation (column-7 '-') does not reopen the {quote} literal " +
+                    "with a matching delimiter in area B, so the continued literal cannot be reconstructed. " +
+                    "Check the copybook's continuation line.");
+
+            // Drop the reopening delimiter; the rest continues the open literal.
+            return previous + cont.Substring(1);
+        }
+
+        // Non-literal continuation: the split word resumes with no separating space.
+        return previous.TrimEnd() + cont;
+    }
+
+    /// <summary>
+    /// Scans <paramref name="text"/> with the same quote-awareness as
+    /// SplitStatements (both delimiters, doubled-delimiter escape) and reports
+    /// whether it ends INSIDE an unterminated alphanumeric literal, returning the
+    /// active delimiter in <paramref name="quote"/> (else '\0').
+    /// </summary>
+    private static bool HasOpenLiteral(string text, out char quote)
+    {
+        var active = '\0';
+        for (var i = 0; i < text.Length; i++)
+        {
+            var c = text[i];
+            if (active != '\0')
+            {
+                if (c == active)
+                {
+                    if (i + 1 < text.Length && text[i + 1] == active)
+                    {
+                        i++;
+                        continue;
+                    }
+                    active = '\0';
+                }
+                continue;
+            }
+            if (c == '\'' || c == '"')
+                active = c;
+        }
+        quote = active;
+        return active != '\0';
+    }
+
+    /// <summary>True when columns 1-6 (0-indexed 0-5) of a line are all blank.</summary>
+    private static bool IsBlankSequenceArea(string line)
+    {
+        for (var i = 0; i < 6 && i < line.Length; i++)
+            if (line[i] != ' ')
+                return false;
+        return true;
     }
 
     /// <summary>
