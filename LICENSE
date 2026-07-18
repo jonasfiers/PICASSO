@@ -19,3 +19,12 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+---
+
+Exception: the DTAR020 sample files
+(src/Picasso.Core/Samples/dtar020/DTAR020.cbl and DTAR020.bin) are NOT covered
+by the MIT license above. They are redistributed from bmTas/CobolToJson
+(https://github.com/bmTas/CobolToJson) under the GNU Lesser General Public
+License, version 2.1 (LGPL-2.1), and remain under that license. See
+src/Picasso.Core/Samples/dtar020/NOTICE.md.

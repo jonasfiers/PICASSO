@@ -1,6 +1,15 @@
 # Changelog
 
-## Unreleased — nested fixed-count `OCCURS` (table of tables)
+## Unreleased
+
+### Robustness & fail-loud hardening
+
+- **Elementary item with subordinates now fails loudly.** An item with a `PICTURE` that also carried a subordinate (e.g. a `10` under a `05 … PIC X`) used to silently drop the subordinate and shift every following offset — a silent miscompute. It is now a named rejection.
+- **Unrecognized `COMPUTATIONAL` usage now fails loudly.** A mistyped or unsupported computational usage (`COMPUTATIONAL3` with a dropped hyphen, `COMP-0`, `COMP-7`) used to be silently skipped, leaving the field mis-sized as `DISPLAY`. It is now rejected with a named error. Harmless no-storage clauses (`VALUE`, `JUSTIFIED`, …) are still tolerated.
+- **Alphanumeric column-1–6 sequence labels are stripped** — real fixed-format copybooks put labels like `JL0001` or `RESERV` in the sequence area, not just six digits; these are now recognized and dropped rather than mis-read as a level number.
+- **Off-column `*` comment banners are recognized** — a `*` starting Area A (column 8) with column 7 blank, as several exported copybooks carry, is now treated as a full-line comment instead of gluing onto the first data item.
+
+### Nested fixed-count `OCCURS` (table of tables)
 
 - Nested **fixed-count** `OCCURS` — an `OCCURS` item inside another `OCCURS`, all fixed counts, to arbitrary depth — is now supported (was a named rejection). It flattens **recursively**: the outer table expands to N copies, each holding M copies of the inner (and deeper), with sequential offsets. Every level's 1-based index rides in the leaf name, one `(index)` segment per `OCCURS` level, matching the single-level style — e.g. `LINE OCCURS 3` over `ITEM OCCURS 4` over `CODE PIC X(2)` gives `LINE(1)-ITEM(1)-CODE`@0 … `LINE(3)-ITEM(4)-CODE`@22, a 3×4×2 = 24-byte record. The outer element's stride is the full byte size of one fully-expanded inner element.
 - Implementation: `ComputeOffsets` already recursed and multiplied correctly (nested offset math was never the gap). The flattening pass was generalized — `Flatten`/`EmitIndexedLeaves` are replaced by a single compositional `EmitSubtree` that carries an accumulated byte-shift and name-prefix, so an OCCURS level expands into indexed copies and recurses, and an inner OCCURS expands in turn. `RejectNestedOccurs` (which only ever caught fixed-in-fixed nesting) is removed.
@@ -8,7 +17,7 @@
 - Still rejected, unchanged, each with its own named error: an `OCCURS … DEPENDING ON` table nested inside another `OCCURS`, and any `OCCURS` (fixed or ODO) nested inside an ODO table — only *fixed*-count nesting is in scope; any variable-length nesting stays gated (enforced by `ValidateAndFindOdos`).
 - Validated against GnuCOBOL (`tools/layout-oracle`, `cobc -std=mvs`): 4/4 nested fixtures (2-level, 3-level, mixed group + trailing field, and COMP-3-in-nested) agree exactly, 0 disagreements. Single-level `OCCURS` output is byte-identical (dedicated regression test).
 
-## Unreleased — multiple ODO tables + `OCCURS 0 TO n`
+### Multiple ODO tables + `OCCURS 0 TO n`
 
 - `OCCURS … DEPENDING ON` now handles **more than one flat ODO table per record** and a **lower bound of 0** (`OCCURS 0 TO n`, a table that may be empty). A later table's depending field sits at an offset that depends on the earlier table's count, so per record the counts are resolved **left-to-right**: fix the earlier counts, which pins the next depending field's offset, read it, continue; then decode/encode against the fully-resolved layout. A count of 0 makes a table contribute no fields, with everything after it shifting to the table's start. Validated by round-trip (Latin-1 + EBCDIC, delimited + undelimited) and cross-checked against GnuCOBOL's `LENGTH OF` at several count combinations.
 - `ParsedCopybook` now exposes `Odos` (one `OdoInfo` per table, in source order); `Odo` remains as a first-table convenience. `BuildConcreteLayout` gains an `IReadOnlyList<int> counts` overload (a partial list lays the uncovered tables out at their minimum — this is what drives left-to-right resolution).
