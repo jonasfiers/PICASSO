@@ -801,4 +801,23 @@ public class CopybookParserTests
         Assert.Equal(5, parsed.Flat[1].Start);
         Assert.Equal(8, parsed.Flat.Max(f => f.Start + f.Len));
     }
+
+    [Fact]
+    public void ElementaryItemWithSubordinateFailsLoudly()
+    {
+        // An item with a PICTURE is elementary and cannot contain sub-items. A
+        // following higher level number under it (here 10 under a 05-with-PIC) is
+        // malformed COBOL — a compiler rejects it. Left unchecked, the subordinate
+        // was silently attached then dropped by the flattener, so the field vanished
+        // and every following offset shifted (a silent miscompute). Must fail loudly.
+        var source =
+            "       01 REC.\n" +
+            "          05 A PIC X(2).\n" +
+            "             10 B PIC X(3).\n" +
+            "          03 C PIC X(4).\n";
+        var ex = Assert.Throws<FormatException>(() => CopybookParser.Parse(source));
+        Assert.Contains("PICTURE", ex.Message);
+        Assert.Contains("'A'", ex.Message);
+        Assert.Contains("'B'", ex.Message);
+    }
 }

@@ -1412,7 +1412,23 @@ public static class CopybookParser
             if (stack.Count == 0)
                 tops.Add(node);
             else
-                stack[stack.Count - 1].Children.Add(node);
+            {
+                // The item this one nests under. If that parent already carries a
+                // PICTURE it is an ELEMENTARY item, and an elementary item cannot
+                // contain sub-items — a compiler rejects "05 A PIC X. / 10 B PIC X."
+                // Left unchecked, the subordinate was silently attached and then
+                // dropped by the flattener (it emits either a group's children or an
+                // elementary's own bytes, never both), so field B vanished and every
+                // following offset shifted — a silent miscompute. Fail loudly instead.
+                var parent = stack[stack.Count - 1];
+                if (parent.Field is not null)
+                    throw new FormatException(
+                        $"Item '{parent.Name}' (level {parent.LevelNumber:D2}) has a PICTURE but also a " +
+                        $"subordinate item '{node.Name}' (level {node.LevelNumber:D2}). An elementary item " +
+                        $"with a PIC clause cannot contain sub-items — fix the level numbers or remove the " +
+                        $"PIC. (A group item carries no PICTURE; only its elementary children do.)");
+                parent.Children.Add(node);
+            }
 
             stack.Add(node);
         }
