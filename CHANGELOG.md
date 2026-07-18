@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased — multiple ODO tables + `OCCURS 0 TO n`
+
+- `OCCURS … DEPENDING ON` now handles **more than one flat ODO table per record** and a **lower bound of 0** (`OCCURS 0 TO n`, a table that may be empty). A later table's depending field sits at an offset that depends on the earlier table's count, so per record the counts are resolved **left-to-right**: fix the earlier counts, which pins the next depending field's offset, read it, continue; then decode/encode against the fully-resolved layout. A count of 0 makes a table contribute no fields, with everything after it shifting to the table's start. Validated by round-trip (Latin-1 + EBCDIC, delimited + undelimited) and cross-checked against GnuCOBOL's `LENGTH OF` at several count combinations.
+- `ParsedCopybook` now exposes `Odos` (one `OdoInfo` per table, in source order); `Odo` remains as a first-table convenience. `BuildConcreteLayout` gains an `IReadOnlyList<int> counts` overload (a partial list lays the uncovered tables out at their minimum — this is what drives left-to-right resolution).
+- Still rejected, each with its own named error: an ODO table nested inside another `OCCURS`, an `OCCURS` (fixed or ODO) nested inside an ODO table, and a depending field defined after its table or absent. The Integration Studio JSON action surface still rejects any ODO copybook loudly (its flat spec is static).
+
 ## 1.1.0 — fixed-count OCCURS
 
 - Fixed-count `OCCURS` is now a supported feature rather than a blanket rejection. An `OCCURS n TIMES` item (`TIMES` optional) — an elementary field or a whole group — is expanded into `n` 1-indexed leaf fields with sequentially computed offsets, one full iteration's worth of bytes apart. This keeps the flat `{Name, Start, Len, Type, …}` model every consumer (`FlatFileCodec`, the JSON contract, `OutSystemsPreview`, the Integration Studio actions) already runs on, rather than introducing a parallel nested/array shape.
