@@ -744,4 +744,22 @@ public class CopybookParserTests
         Assert.Equal(4, parsed.Flat[1].Start);
         Assert.Equal(54, parsed.Flat.Max(f => f.Start + f.Len));
     }
+
+    [Fact]
+    public void ListingControlDirectivesAreSkipped()
+    {
+        // EJECT / SKIP1-3 / TITLE format the compiler's listing and carry no
+        // storage; they must be ignored, not treated as data entries.
+        var source =
+            "       01  R.\n" +
+            "       SKIP1\n" +
+            "           05  A PIC X(3).\n" +
+            "       EJECT\n" +
+            "           05  B PIC 9(4).\n" +
+            "       TITLE 'MY LISTING TITLE'.\n" +
+            "           05  C PIC X(2).\n";
+        var parsed = CopybookParser.Parse(source);
+        Assert.Equal(new[] { "A", "B", "C" }, parsed.Flat.Select(f => f.Name));
+        Assert.Equal(9, parsed.Flat.Max(f => f.Start + f.Len));
+    }
 }

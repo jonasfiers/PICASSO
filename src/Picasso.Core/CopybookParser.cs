@@ -351,6 +351,10 @@ public static class CopybookParser
     /// identifies the line as fixed-format on its own, with no mode flag needed.
     /// Detection is per line, so a file may mix both forms.
     /// </summary>
+    /// <summary>COBOL source-listing control directives — no storage, formatting only.</summary>
+    private static readonly HashSet<string> ListingDirectives =
+        new(StringComparer.Ordinal) { "EJECT", "SKIP1", "SKIP2", "SKIP3", "TITLE" };
+
     /// <summary>An EXEC SQL ... END-EXEC precompiler block (DB2 DCLGEN). No storage.</summary>
     private static readonly Regex ExecSqlBlock =
         new Regex(@"EXEC\s+SQL\b.*?\bEND-EXEC", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.Singleline);
@@ -495,6 +499,23 @@ public static class CopybookParser
                 // physical line contributes nothing further.
                 outputLines.Add(string.Empty);
                 continue;
+            }
+
+            // Source-listing control directives (EJECT, SKIP1/2/3, TITLE) format the
+            // compiler's printed listing and carry no storage. They sit on their own
+            // line with no period terminator, so they must be dropped HERE, like a
+            // comment — reaching SplitStatements, a period-less directive would glue
+            // onto the following field's statement and swallow it.
+            var trimmedStart = line.TrimStart();
+            if (trimmedStart.Length > 0)
+            {
+                var space = trimmedStart.IndexOf(' ');
+                var firstWord = (space < 0 ? trimmedStart : trimmedStart.Substring(0, space)).ToUpperInvariant();
+                if (ListingDirectives.Contains(firstWord))
+                {
+                    outputLines.Add(string.Empty);
+                    continue;
+                }
             }
 
             outputLines.Add(line);
