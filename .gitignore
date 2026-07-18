@@ -10,3 +10,6 @@ obj/
 # Python
 __pycache__/
 *.pyc
+
+# Internal AI-coordination notes — not for the public repo
+/CLAUDE.md
