@@ -398,8 +398,14 @@ public static class FlatFileCodec
 
             case FieldType.Binary:
                 // Big-endian two's-complement integer bytes — like COMP-3, raw
-                // binary that must never pass through an encoding table.
-                return Binary.Decode(Latin1StringToBytes(raw), field.Digits, field.Scale, field.Signed);
+                // binary that must never pass through an encoding table. Digits > 0
+                // is a digit-derived COMP/COMP-4/BINARY field (width from the digit
+                // count); Digits == 0 is a named binary usage (BINARY-CHAR/SHORT/
+                // LONG/DOUBLE) whose width is authoritative in field.Len — routed
+                // through the width-explicit decode.
+                return field.Digits > 0
+                    ? Binary.Decode(Latin1StringToBytes(raw), field.Digits, field.Scale, field.Signed)
+                    : Binary.Decode(Latin1StringToBytes(raw), field.Scale, field.Signed);
 
             case FieldType.NumericDisplay:
                 return DecodeNumericDisplay(DecodeText(raw, encoding), field);
@@ -471,8 +477,12 @@ public static class FlatFileCodec
             case FieldType.Binary:
             {
                 // Deliberately not translated — big-endian two's-complement bytes.
+                // Digits > 0: digit-derived COMP width. Digits == 0: a named binary
+                // usage whose width is field.Len (width-explicit encode).
                 var d = Convert.ToDecimal(value);
-                var bytes = Binary.Encode(d, field.Digits, field.Scale, field.Signed);
+                var bytes = field.Digits > 0
+                    ? Binary.Encode(d, field.Digits, field.Scale, field.Signed)
+                    : Binary.EncodeWidth(d, field.Len, field.Scale, field.Signed);
                 return BytesToLatin1String(bytes);
             }
 

@@ -69,12 +69,74 @@ public static class Binary
         return bytes;
     }
 
+    /// <summary>
+    /// Width-explicit encode for the named binary usages: the byte
+    /// <paramref name="width"/> (1/2/4/8) is fixed by the usage, not a digit count.
+    /// Big-endian, two's-complement when <paramref name="signed"/>. The value is
+    /// range-checked against the width's representable range — signed
+    /// [-2^(8w-1), 2^(8w-1)), unsigned [0, 2^(8w)) — and a value outside it
+    /// overflows loudly rather than wrapping or truncating.
+    /// </summary>
+    public static byte[] EncodeWidth(decimal value, int width, int scale, bool signed)
+    {
+        if (width is not (1 or 2 or 4 or 8))
+            throw new ArgumentException($"Binary field width must be 1, 2, 4 or 8 bytes; got {width}.");
+
+        var scaled = Math.Truncate(value * Pow10(scale));
+        var negative = scaled < 0;
+        if (negative && !signed)
+            throw new ArgumentException("Negative value for an unsigned binary field.");
+
+        var modulus = Pow256(width);
+        if (signed)
+        {
+            var half = modulus / 2m;
+            if (scaled >= half || scaled < -half)
+                throw new OverflowException(
+                    $"Value {scaled} does not fit a signed {width}-byte binary field.");
+        }
+        else if (scaled >= modulus)
+        {
+            throw new OverflowException(
+                $"Value {scaled} does not fit an unsigned {width}-byte binary field.");
+        }
+
+        var encoded = negative ? modulus + scaled : scaled;
+        var u = (ulong)encoded;
+
+        var bytes = new byte[width];
+        for (var i = width - 1; i >= 0; i--)
+        {
+            bytes[i] = (byte)(u & 0xFF);
+            u >>= 8;
+        }
+        return bytes;
+    }
+
     public static decimal Decode(byte[] data, int digits, int scale, bool signed)
     {
         var expectedLength = ByteLength(digits);
         if (data.Length != expectedLength)
             throw new ArgumentException(
                 $"Expected {expectedLength} binary bytes for {digits} digits, got {data.Length}.");
+
+        return Decode(data, scale, signed);
+    }
+
+    /// <summary>
+    /// Width-explicit decode: the caller has already fixed the byte width, so the
+    /// value is read straight off <paramref name="data"/>'s length rather than a
+    /// digit count. This is the path for the named binary usages
+    /// (BINARY-CHAR/SHORT/LONG/DOUBLE), whose width — 1/2/4/8 bytes — is intrinsic
+    /// to the usage name and carries no PICTURE. Big-endian, two's-complement when
+    /// <paramref name="signed"/>, plain magnitude otherwise; identical arithmetic
+    /// to the digit-derived overload, which now delegates here.
+    /// </summary>
+    public static decimal Decode(byte[] data, int scale, bool signed)
+    {
+        if (data.Length is not (1 or 2 or 4 or 8))
+            throw new ArgumentException(
+                $"Binary field width must be 1, 2, 4 or 8 bytes; got {data.Length}.");
 
         // Assemble the big-endian magnitude. A doubleword's full unsigned range
         // reaches 2^64-1, which overflows a long but fits a ulong and then a decimal.

@@ -843,6 +843,10 @@ public static class CopybookParser
         var signSeparate = false;
         var signLeading = false;
         var synchronized = false;
+        // A named binary usage (BINARY-CHAR/SHORT/LONG/DOUBLE) carries its byte
+        // width in the usage name, not a PIC digit count. Null until one is seen.
+        int? namedBinaryWidth = null;
+        var namedBinarySigned = true; // SIGNED is the default; UNSIGNED flips it.
         var occursCount = 1;
         string? redefinesTarget = null;
         var isOdo = false;
@@ -1047,6 +1051,45 @@ public static class CopybookParser
                     i += 1;
                     break;
 
+                // Named binary usages — BINARY-CHAR / BINARY-SHORT / BINARY-LONG /
+                // BINARY-DOUBLE. Unlike COMP/BINARY (whose width comes from the PIC
+                // digit count), these carry a FIXED width in the usage name and no
+                // PIC at all: 1 / 2 / 4 / 8 bytes respectively, big-endian, stored
+                // two's-complement (SIGNED, the default) or plain magnitude
+                // (UNSIGNED). SIGNED/UNSIGNED is a separate following token, consumed
+                // here. A field with one of these used to VANISH (no PIC → no
+                // FieldSpec → dropped as a childless group, shifting every following
+                // offset) — a silent miscompute; now it is sized from the usage.
+                case "BINARY-CHAR":
+                case "BINARY-SHORT":
+                case "BINARY-LONG":
+                case "BINARY-DOUBLE":
+                    namedBinaryWidth = token switch
+                    {
+                        "BINARY-CHAR" => 1,
+                        "BINARY-SHORT" => 2,
+                        "BINARY-LONG" => 4,
+                        _ => 8, // BINARY-DOUBLE
+                    };
+                    i += 1;
+                    if (i < tokens.Length && tokens[i].Equals("SIGNED", StringComparison.OrdinalIgnoreCase))
+                    {
+                        namedBinarySigned = true;
+                        i += 1;
+                    }
+                    else if (i < tokens.Length && tokens[i].Equals("UNSIGNED", StringComparison.OrdinalIgnoreCase))
+                    {
+                        namedBinarySigned = false;
+                        i += 1;
+                    }
+                    break;
+
+                // BINARY-C-LONG is GnuCOBOL's platform-dependent C `long` (4 bytes on
+                // ILP32/LLP64, 8 on LP64). Its width is not fixed by the standard, so
+                // guessing one risks a silent miscompute — rejected loudly instead.
+                case "BINARY-C-LONG":
+                    throw UnsupportedUsage("BINARY-C-LONG", "platform-dependent C long", name, statement);
+
                 // PACKED-DECIMAL is byte-identical to COMP-3; alias it to the same
                 // packed-decimal path rather than giving it a parallel implementation.
                 case "PACKED-DECIMAL":
@@ -1168,17 +1211,53 @@ public static class CopybookParser
         // combination would be malformed source anyway); None means the entry
         // stated no usage and will inherit any ancestor group's. This is captured
         // for a group item too (which carries no PIC), so its usage can flow down.
+        // A named binary usage counts as a declared (non-None) usage of its own so
+        // the group-USAGE inheritance pass treats it as already-typed and never
+        // tries to rebuild its width-explicit FieldSpec from a (nonexistent) PIC.
         var declaredUsage =
             comp3 ? DeclaredUsage.Comp3 :
-            binary ? DeclaredUsage.Binary :
+            (binary || namedBinaryWidth != null) ? DeclaredUsage.Binary :
             sawDisplay ? DeclaredUsage.Display :
             DeclaredUsage.None;
 
         PicSpec? pic = pictureText != null ? Pic.ParsePicClause(pictureText) : null;
 
+        // A named binary usage fixes the field's width by itself and is normally
+        // pic-less. Combining it with a PIC (nonstandard) would pit the usage's
+        // fixed width against the digit count — reject rather than guess which wins.
+        // The same intrinsic-sign reasoning as COMP applies: SIGN IS ... SEPARATE is
+        // contradictory on a binary field and is rejected too.
+        if (namedBinaryWidth != null)
+        {
+            if (pictureText != null)
+                throw new FormatException(
+                    $"A named binary usage (BINARY-CHAR/SHORT/LONG/DOUBLE) fixes its own byte width and cannot " +
+                    $"be combined with a PIC clause: field '{name}' in \"{statement}\".");
+            if (comp3 || binary)
+                throw new FormatException(
+                    $"A named binary usage cannot be combined with another USAGE clause: field '{name}' in \"{statement}\".");
+            if (signSeparate)
+                throw new FormatException(
+                    $"SIGN IS ... SEPARATE cannot be combined with a named binary usage: its sign is intrinsic " +
+                    $"to the two's-complement representation, not a separate byte: field '{name}' in \"{statement}\".");
+        }
+
         FieldSpec? field = null;
         if (pic != null)
             field = BuildFieldSpec(name, pic, comp3, binary, signSeparate, signLeading);
+        else if (namedBinaryWidth != null)
+            field = new FieldSpec
+            {
+                Name = name,
+                Type = FieldType.Binary,
+                // Digits == 0 marks this as a width-explicit (named) binary so the
+                // codec sizes it from Len, not a digit count. Scale is 0: these
+                // usages take no PICTURE, so no implied decimal.
+                Digits = 0,
+                Scale = 0,
+                Signed = namedBinarySigned,
+                Len = namedBinaryWidth.Value,
+            };
 
         return new ParsedStatement
         {
