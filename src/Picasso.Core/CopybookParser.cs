@@ -141,6 +141,17 @@ public static class CopybookParser
         // ComputeOffsets (which reads Field.Len).
         InheritGroupUsage(root, DeclaredUsage.None);
 
+        // An elementary item must define storage. A leaf node (no subordinates)
+        // that also carries no FieldSpec is an item with neither a PICTURE nor a
+        // width-bearing USAGE and no children — e.g. "05 B." — which a real
+        // compiler rejects ("PICTURE clause required"). Left unchecked the
+        // flattener drops it silently, vanishing a field the author intended and
+        // shifting nothing to signal it — a fail-loud hole. Reject it by name.
+        // (Level-88/66 never reach the tree, so a "group" whose only listed
+        // subordinates were 88s lands here too — correctly: a group with no
+        // elementary item is itself invalid.)
+        RejectStoragelessLeaves(root, isRoot: true);
+
         // Nested FIXED-count OCCURS (a table of tables) is supported: it flattens
         // recursively, each level carrying its own 1-based index. No dedicated
         // rejection pass is needed for it — the offset math (ComputeOffsets) and the
@@ -185,6 +196,27 @@ public static class CopybookParser
             odos = odoNodes.Select(n => BuildOdoInfo(n, flat)).ToList();
 
         return new ParsedCopybook(root, flat, rootIsSynthetic, odos);
+    }
+
+    /// <summary>
+    /// Rejects a leaf node carrying neither a <see cref="FieldSpec"/> nor children —
+    /// a data-name with no PICTURE, no width-bearing USAGE, and no subordinates
+    /// (e.g. <c>05 B.</c>). A real COBOL compiler requires such an item to have a
+    /// PICTURE; PICASSO's flattener would otherwise drop it silently and lose the
+    /// storage the record's author intended, so it fails loudly here instead. The
+    /// record root is exempt — a wholly empty record is reported separately (with a
+    /// whole-record message) by the flat-count guard.
+    /// </summary>
+    private static void RejectStoragelessLeaves(CopybookNode node, bool isRoot)
+    {
+        if (!isRoot && node.Field is null && node.Children.Count == 0)
+            throw new FormatException(
+                $"Item '{node.Name}' (level {node.LevelNumber:D2}) has no PICTURE, no width-bearing USAGE, " +
+                "and no subordinate items — it defines no storage. An elementary item needs a PIC clause and " +
+                "a group needs subordinate items; a real compiler rejects this, and silently skipping it would " +
+                "drop the field and mis-size the record. Add a PIC clause, or remove the item.");
+        foreach (var child in node.Children)
+            RejectStoragelessLeaves(child, isRoot: false);
     }
 
     /// <summary>
@@ -827,7 +859,14 @@ public static class CopybookParser
         // occupies ZERO new storage (it renames existing bytes), so it is tolerated
         // and dropped: the alias itself isn't surfaced, but the byte layout is
         // unaffected. Its body (the RENAMES/THRU operands) is never interpreted.
-        if (level == 88 || level == 66)
+        // Level 78 (named constant, e.g. 78 MAX-ROWS VALUE 100) — a compile-time
+        // constant that occupies NO storage, so it is tolerated and dropped the same
+        // way. (If such a constant is used as an OCCURS/PIC count, that reference is
+        // separately unresolvable and rejected there — dropping the definition never
+        // silently mis-sizes anything.) Without this, a 78 reached the tree as a
+        // storageless leaf and would trip the storageless-leaf guard, wrongly
+        // rejecting a valid copybook that mixes 78 constants with data fields.
+        if (level == 88 || level == 66 || level == 78)
             return null;
 
         string? pictureText = null;
@@ -1141,6 +1180,8 @@ public static class CopybookParser
                     throw UnsupportedUsage("PROCEDURE-POINTER", "procedure pointer", name, statement);
                 case "FUNCTION-POINTER":
                     throw UnsupportedUsage("FUNCTION-POINTER", "function pointer", name, statement);
+                case "PROGRAM-POINTER":
+                    throw UnsupportedUsage("PROGRAM-POINTER", "program pointer", name, statement);
                 // OBJECT in clause position is the OBJECT REFERENCE usage (two
                 // tokens; REFERENCE falls through the default skip and never
                 // matters). Like COMP-1/COMP-2 it carries no PIC, so skipping it

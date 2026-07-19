@@ -582,7 +582,8 @@ public class CopybookParserTests
     {
         var ex = Assert.Throws<FormatException>(
             () => CopybookParser.Parse("01  R.\n    05  G.\n"));
-        Assert.Contains("no elementary fields", ex.Message);
+        Assert.Contains("defines no storage", ex.Message);
+        Assert.Contains("'G'", ex.Message);
     }
 
     /// <summary>
@@ -597,7 +598,37 @@ public class CopybookParserTests
             "01  R.\n" +
             "    05  G.\n" +
             "        88  C VALUE 'X'.\n"));
-        Assert.Contains("no elementary fields", ex.Message);
+        Assert.Contains("defines no storage", ex.Message);
+        Assert.Contains("'G'", ex.Message);
+    }
+
+    /// <summary>
+    /// A pic-less, childless item sitting BETWEEN real fields ("05 B.") used to be
+    /// silently dropped — sliding every following field forward and under-sizing the
+    /// record with no error, a silent miscompute. It must fail loud, naming B.
+    /// </summary>
+    [Fact]
+    public void RejectsPicLessItemAmongRealFields()
+    {
+        var ex = Assert.Throws<FormatException>(() => CopybookParser.Parse(
+            "01  R.\n    05  A PIC X(3).\n    05  B.\n    05  C PIC X(2).\n"));
+        Assert.Contains("defines no storage", ex.Message);
+        Assert.Contains("'B'", ex.Message);
+    }
+
+    /// <summary>
+    /// A level-78 named constant carries no storage (like an 88): it is tolerated,
+    /// dropped, and never affects the layout — so a copybook mixing a 78 constant
+    /// with data fields parses, with the fields at their unshifted offsets.
+    /// </summary>
+    [Fact]
+    public void Level78NamedConstantIsIgnored()
+    {
+        var parsed = CopybookParser.Parse(
+            "01  R.\n    05  A PIC X(2).\n    78  MAX-ROWS VALUE 100.\n    05  B PIC X(3).\n");
+        Assert.Equal(2, parsed.Flat.Count);
+        Assert.Equal(("A", 0, 2), (parsed.Flat[0].Name, parsed.Flat[0].Start, parsed.Flat[0].Len));
+        Assert.Equal(("B", 2, 3), (parsed.Flat[1].Name, parsed.Flat[1].Start, parsed.Flat[1].Len));
     }
 
     /// <summary>

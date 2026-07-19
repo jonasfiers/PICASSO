@@ -38,6 +38,7 @@ public class CopybookParserUsageRejectionTests
     [InlineData("POINTER-64", "POINTER-64")]
     [InlineData("PROCEDURE-POINTER", "PROCEDURE-POINTER")]
     [InlineData("FUNCTION-POINTER", "FUNCTION-POINTER")]
+    [InlineData("PROGRAM-POINTER", "PROGRAM-POINTER")]
     [InlineData("NATIONAL", "NATIONAL")]
     [InlineData("DISPLAY-1", "DISPLAY-1")]
     [InlineData("UTF-8", "UTF-8")]
