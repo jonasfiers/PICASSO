@@ -911,6 +911,49 @@ public class CopybookParserTests
     }
 
     [Fact]
+    public void NonzeroSequenceNumberOnContinuationLineIsStrippedNotLeakedAsOperand()
+    {
+        // SILENT-MISCOMPUTE regression. A fixed-format clause operand placed on its own
+        // line (here the OCCURS count) carries a nonzero cols-1-6 sequence number. The
+        // numeric-spaced detector only strips lines that OPEN with a level number, so
+        // this continuation line kept its "130" — which then joined the statement as
+        // "05 T OCCURS 130 0003 TIMES ..." and was consumed as the OCCURS count,
+        // sizing the record at 130*2 = 260 with NO exception. GnuCOBOL reads it as
+        // OCCURS 0003 = 3*2 = 6. The open-statement continuation strip must produce 6.
+        var source =
+            "100    01  REC.\n" +
+            "120        05  T OCCURS\n" +
+            "130           0003 TIMES PIC X(02).\n";
+
+        var parsed = CopybookParser.Parse(source);
+
+        Assert.Equal(6, parsed.Flat.Max(f => f.Start + f.Len));   // 3 occurrences x 2, not 130 x 2
+        Assert.Equal(3, parsed.Flat.Count);
+        Assert.DoesNotContain("130", CopybookParser.StripComments(source));
+    }
+
+    [Fact]
+    public void FreeFormatIndentedOccursOperandIsNotStripped()
+    {
+        // SAFETY counterpart to the continuation strip. A FREE-format continuation line
+        // whose OCCURS count sits INSIDE cols 1-6 ("   03 TIMES ...", the "03" at cols
+        // 4-5) has the same digits/spaces cols-1-6 shape as a sequence area — but its
+        // column 1 is a SPACE, not a digit. The column-1 guard must keep it from being
+        // treated as a left-aligned sequence number: stripping cols 1-6 would destroy
+        // the "03" operand and mis-size (or reject) the table. A correct parse (OCCURS
+        // 3 -> 6 bytes, matching GnuCOBOL) proves the operand survived.
+        var source =
+            "01 REC.\n" +
+            "   05 T OCCURS\n" +
+            "   03 TIMES PIC X(02).\n";
+
+        var parsed = CopybookParser.Parse(source);
+
+        Assert.Equal(6, parsed.Flat.Max(f => f.Start + f.Len));
+        Assert.Equal(3, parsed.Flat.Count);
+    }
+
+    [Fact]
     public void IndentedFreeFormatLevelNumberIsNotMistakenForNumericSpacedSequence()
     {
         // SAFETY GUARD for the numeric-spaced-sequence rule. A free-format line indented

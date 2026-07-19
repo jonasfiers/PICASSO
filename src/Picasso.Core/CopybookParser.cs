@@ -476,14 +476,27 @@ public static class CopybookParser
         // Index into outputLines of the last line that carried real code; the target
         // a continuation line is joined onto. -1 until the first code line appears.
         var lastCodeIndex = -1;
+        // Whether the statement stream emitted so far ends mid-statement (no terminating
+        // '.' yet). Gates the fixed-format IMPLICIT-continuation strip below: only when a
+        // statement is open can a following numeric-spaced line be a continuation of it
+        // rather than a new item — the signal that keeps a free-format entry (always
+        // after a closed statement) from being misread and truncated.
+        var statementOpen = false;
 
         foreach (var rawLine in source.Replace("\r\n", "\n").Split('\n'))
         {
             var line = rawLine;
             var continuation = false;
 
+            // A fixed-format continuation line whose cols 1-6 hold a short/space-padded
+            // sequence number and whose code area does NOT open with a level number: it
+            // continues the open statement above. Its sequence number MUST be stripped —
+            // left in place a nonzero one leaks into the joined statement and is consumed
+            // as a real operand (an OCCURS count, a PIC), silently mis-sizing the record.
+            var numericSpacedContinuation = statementOpen && IsNumericSpacedContinuation(line);
+
             if (FixedFormatSequenceNumber.IsMatch(line) || HasAlphanumericSequenceArea(line)
-                || HasNumericSpacedSequenceArea(line))
+                || HasNumericSpacedSequenceArea(line) || numericSpacedContinuation)
             {
                 line = line.Substring(6);
                 if (line.Length > FixedFormatCodeLength)
@@ -572,6 +585,8 @@ public static class CopybookParser
                         "continue. Check the copybook's column-7 indicator area.");
 
                 outputLines[lastCodeIndex] = JoinContinuation(outputLines[lastCodeIndex], line);
+                // The joined content extends the previous statement; recompute openness.
+                statementOpen = StatementRemainsOpen(outputLines[lastCodeIndex]);
                 // The continuation's content now lives on lastCodeIndex; this
                 // physical line contributes nothing further.
                 outputLines.Add(string.Empty);
@@ -597,7 +612,13 @@ public static class CopybookParser
 
             outputLines.Add(line);
             if (line.Trim().Length > 0)
+            {
                 lastCodeIndex = outputLines.Count - 1;
+                // Track whether this line leaves a statement open, so the next line can
+                // be recognised as a fixed-format continuation of it. Blank/comment lines
+                // (handled above with `continue`) leave the prior state untouched.
+                statementOpen = StatementRemainsOpen(line);
+            }
         }
 
         return string.Join("\n", outputLines) + "\n";
@@ -700,8 +721,24 @@ public static class CopybookParser
     /// name's LETTERS ("05  PA"), which this never accepts; and an all-blank sequence
     /// area (no digit) is indistinguishable from free-format indentation, so it is
     /// deliberately NOT matched here (the &gt;=1-digit requirement excludes it).
+    ///
+    /// This handles a line that OPENS with a level number (a new item). A fixed-format
+    /// CONTINUATION line — a clause operand on its own line, whose code area does not
+    /// open with a level — is matched by <see cref="IsNumericSpacedContinuation"/>
+    /// instead, guarded by an open-statement check in the caller.
     /// </summary>
     private static bool HasNumericSpacedSequenceArea(string line)
+        => HasNumericSpacedSequenceCols(line) && HasFixedFormatIndicatorAndLevel(line);
+
+    /// <summary>
+    /// True when columns 1-6 (indices 0-5) are only digits and spaces with at least one
+    /// digit — the shape of a short or space-padded sequence number ("00000 ", "000010",
+    /// "12   "). A letter (a free-format DATA-NAME) fails it; an all-blank area (no
+    /// digit) is deliberately excluded because it is indistinguishable from free-format
+    /// indentation. This is the cols-1-6 SHAPE only; the fixed-format signature
+    /// (indicator / level) is checked separately.
+    /// </summary>
+    private static bool HasNumericSpacedSequenceCols(string line)
     {
         if (line.Length < 8) return false;
         var sawDigit = false;
@@ -712,9 +749,7 @@ public static class CopybookParser
             if (c < '0' || c > '9') return false;   // any letter/punct: not this shape
             sawDigit = true;
         }
-        if (!sawDigit) return false;   // all-blank area is ambiguous with free-format
-
-        return HasFixedFormatIndicatorAndLevel(line);
+        return sawDigit;                            // all-blank area is not a sequence area
     }
 
     /// <summary>
@@ -733,11 +768,67 @@ public static class CopybookParser
         // Otherwise the indicator must be blank (or a debug 'D'), and the code area
         // must open with a level number.
         if (indicator != ' ' && indicator != 'D' && indicator != 'd') return false;
+        return CodeOpensWithLevel(line.Substring(7));
+    }
 
-        var code = line.Substring(7).TrimStart();
+    /// <summary>
+    /// True when the code area (the text after column 7) opens with a COBOL level
+    /// number — 1-2 leading digits followed by a blank or end-of-line.
+    /// </summary>
+    private static bool CodeOpensWithLevel(string afterIndicator)
+    {
+        var code = afterIndicator.TrimStart();
         var digits = 0;
         while (digits < code.Length && char.IsDigit(code[digits])) digits++;
         return digits >= 1 && digits <= 2 && (digits == code.Length || code[digits] == ' ');
+    }
+
+    /// <summary>
+    /// True when <paramref name="line"/> is a fixed-format CONTINUATION line carrying a
+    /// short/space-padded numeric sequence area whose code area does NOT open with a
+    /// level number — a clause operand placed on its own line, e.g. an <c>OCCURS</c>
+    /// count or a <c>PIC</c> string continuing the item on the line above
+    /// (<c>"130           0003 TIMES PIC X(02)."</c> under <c>"120  05 T OCCURS"</c>).
+    /// The caller only treats it as one when the previous statement is still OPEN (the
+    /// mid-statement guard in <see cref="StripComments"/>): that is what tells a genuine
+    /// continuation from a new item, and — critically — keeps a free-format entry (which
+    /// always follows a closed statement) from being misread.
+    ///
+    /// Two further guards make it safe: cols 1-6 must be digits/spaces only (a
+    /// free-format name's letters exclude it), and column 1 must itself be a DIGIT — a
+    /// left-aligned sequence number. That column-1 test is load-bearing: it separates a
+    /// sequence number ("130", operand at col 8+, so strip cols 1-6) from an indented
+    /// free-format operand ("    03 TIMES", the "03" sitting IN cols 5-6, which must NOT
+    /// be stripped or the operand is destroyed). Without stripping, a NONZERO sequence
+    /// number leaks into the joined statement and is consumed as a real operand — a
+    /// SILENT miscompute (a sequence number on an OCCURS-count line mis-sizes the whole
+    /// record with no exception). Mirrors <c>oracle.py</c>'s <c>spaced_cont</c> clause.
+    /// </summary>
+    private static bool IsNumericSpacedContinuation(string line)
+    {
+        if (!HasNumericSpacedSequenceCols(line)) return false;
+        if (line[0] < '0' || line[0] > '9') return false;   // left-aligned sequence number only
+        var indicator = line[6];
+        if (indicator != ' ' && indicator != 'D' && indicator != 'd') return false;
+        // A line that opens with a level number is a new item, not a continuation —
+        // the normal HasNumericSpacedSequenceArea path already strips it.
+        return !CodeOpensWithLevel(line.Substring(7));
+    }
+
+    /// <summary>
+    /// True when <paramref name="code"/> (a cleaned code line) leaves a COBOL statement
+    /// unterminated — its final non-blank character is not the '.' terminator, or an
+    /// alphanumeric literal is still open at end-of-line. Used to decide whether the
+    /// NEXT line is a fixed-format continuation of an open statement. A blank line
+    /// carries no content and never closes a statement, so the caller keeps the prior
+    /// state for those rather than calling this.
+    /// </summary>
+    private static bool StatementRemainsOpen(string code)
+    {
+        var trimmed = code.TrimEnd();
+        if (trimmed.Length == 0) return false;
+        if (HasOpenLiteral(trimmed, out _)) return true;   // literal spans to EOL → open
+        return trimmed[trimmed.Length - 1] != '.';         // no terminator period → still open
     }
 
     /// <summary>True when columns 1-6 (0-indexed 0-5) of a line are all blank.</summary>
