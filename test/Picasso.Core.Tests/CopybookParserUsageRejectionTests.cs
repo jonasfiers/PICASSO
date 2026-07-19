@@ -14,7 +14,8 @@ namespace Picasso.Core.Tests;
 /// following offset. Binary COMP/COMP-4/COMP-5/BINARY and PACKED-DECIMAL are now
 /// SUPPORTED and no longer appear here — see <see cref="BinaryTests"/>; what stays
 /// rejected is float (COMP-1/COMP-2), the Micro Focus COMP-6/COMP-X, and the
-/// pointer/index/alignment/DBCS family.
+/// pointer/index/DBCS family. (SYNC/SYNCHRONIZED alignment is now supported —
+/// it aligns rather than rejects — so it is no longer in this list.)
 /// </summary>
 public class CopybookParserUsageRejectionTests
 {
@@ -37,8 +38,6 @@ public class CopybookParserUsageRejectionTests
     [InlineData("POINTER-64", "POINTER-64")]
     [InlineData("PROCEDURE-POINTER", "PROCEDURE-POINTER")]
     [InlineData("FUNCTION-POINTER", "FUNCTION-POINTER")]
-    [InlineData("SYNC", "SYNC")]
-    [InlineData("SYNCHRONIZED", "SYNC")]
     [InlineData("NATIONAL", "NATIONAL")]
     [InlineData("DISPLAY-1", "DISPLAY-1")]
     [InlineData("UTF-8", "UTF-8")]

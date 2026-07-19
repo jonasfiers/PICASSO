@@ -190,16 +190,26 @@ public static class CopybookParser
     /// <summary>
     /// Finds every OCCURS ... DEPENDING ON table in the tree, in source order,
     /// and enforces the supported scope loudly. Returns an empty list for an
-    /// ordinary fixed copybook. Multiple flat ODO tables per record ARE
-    /// supported (resolved left-to-right at decode time). Still rejected, per
-    /// table: an ODO table nested inside another OCCURS (fixed or ODO), and any
-    /// OCCURS (fixed or ODO) nested inside an ODO table's own subtree — each a
-    /// shape PICASSO does not model.
+    /// ordinary fixed copybook. Only a SINGLE flat, top-level ODO table per
+    /// record is supported: the codec reads one depending-field count per record
+    /// and lays the record out against it (see <see cref="FlatFileCodec"/>, which
+    /// resolves <see cref="ParsedCopybook.Odo"/> only). More than one ODO table
+    /// in a record is rejected here — the codec cannot resolve two independent
+    /// counts, so accepting it would leave every table after the first stuck at
+    /// its minimum (a wrong layout). Also rejected, per table: an ODO table
+    /// nested inside another OCCURS (fixed or ODO), and any OCCURS (fixed or ODO)
+    /// nested inside an ODO table's own subtree — each a shape PICASSO does not model.
     /// </summary>
     private static List<CopybookNode> ValidateAndFindOdos(CopybookNode root)
     {
         var odoNodes = new List<CopybookNode>();
         CollectOdo(root, odoNodes);
+
+        if (odoNodes.Count > 1)
+            throw new FormatException(
+                $"More than one OCCURS ... DEPENDING ON table in this record ('{odoNodes[0].Name}' and " +
+                $"'{odoNodes[1].Name}'). Only a single variable-length table per record is supported — two " +
+                "would make the record's shape depend on two counts at once, which this codec does not model.");
 
         foreach (var odo in odoNodes)
         {
