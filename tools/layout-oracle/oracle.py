@@ -27,8 +27,11 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 
 def build_picasso_layout():
     proj = os.path.join(HERE, "PicassoLayout")
-    r = subprocess.run(["dotnet", "build", "-c", "Release", "-v", "q"],
-                       cwd=proj, capture_output=True, text=True)
+    try:
+        r = subprocess.run(["dotnet", "build", "-c", "Release", "-v", "q"],
+                           cwd=proj, capture_output=True, text=True, timeout=600)
+    except subprocess.TimeoutExpired:
+        sys.exit("PicassoLayout build timed out (>600s)")
     if r.returncode != 0:
         sys.exit("PicassoLayout build failed:\n" + r.stdout + r.stderr)
     dll = glob.glob(os.path.join(proj, "bin", "Release", "net*", "picasso-layout.dll"))
@@ -36,7 +39,10 @@ def build_picasso_layout():
     return dll[0]
 
 def picasso_totals(dll, files):
-    r = subprocess.run(["dotnet", dll] + files, capture_output=True, text=True)
+    try:
+        r = subprocess.run(["dotnet", dll] + files, capture_output=True, text=True, timeout=600)
+    except subprocess.TimeoutExpired:
+        sys.exit("PicassoLayout dump timed out (>600s)")
     out = {}
     for line in r.stdout.splitlines():
         m = re.match(r'## (.+?) (\d+)$', line)
@@ -44,19 +50,28 @@ def picasso_totals(dll, files):
     return out
 
 def data_lines(path):
+    # NOTE: this is a SEPARATE, independent re-normalization of the copybook from
+    # PICASSO's own — deliberately so. The oracle's value is that cobc reaches the
+    # layout from a source read by different code than PICASSO's; a bug in either
+    # reader then shows up (as a disagreement, or — if this reader is weaker — as an
+    # itemized COBC_UNCOMPARABLE, which main() now prints so the gap can't hide).
+    # It must stay at least as capable as the parser it checks: hence fixed-format
+    # sequence areas and col-7 continuations are handled here too.
     res = []
+    pending = None   # the logical line being built; col-7 '-' continuations merge in
     for raw in open(path, encoding='latin-1'):
         line = raw.rstrip("\r\n")
+        cont = False
         # Fixed-format with a NUMERIC sequence area (cols 1-6 all digits, e.g.
         # DTAR020's 000100/000200/...): col 7 is the indicator, cols 8-72 the code,
-        # cols 73-80 an identification area to drop. Strip to the code so the level
-        # number is visible to the tokenizer. Only the numeric-sequence signal is
-        # trusted — an all-blank sequence area is indistinguishable from free-format
+        # cols 73-80 an identification area to drop. Only the numeric-sequence signal
+        # is trusted — an all-blank sequence area is indistinguishable from free-format
         # indentation (6 leading spaces before a level number), so those lines are
         # left as-is rather than risk mangling a valid free-format copybook.
         if len(line) >= 7 and line[:6].isdigit():
             if line[6] in ('*', '/'):     # fixed-format comment line
                 continue
+            cont = (line[6] == '-')       # col-7 continuation of the previous line
             code = line[7:72]             # cols 8-72
         else:
             if line.strip().startswith('*'):   # free-format / area-A comment
@@ -64,8 +79,26 @@ def data_lines(path):
             if len(line) >= 7 and line[6] == '*':
                 continue
             code = line
-        if not code.strip(): continue
-        res.append(code.strip())
+        stripped = code.strip()
+        if cont and pending is not None:
+            # Continue the previous logical line. If it left a literal open (odd
+            # number of quotes), the continuation resumes with a quote — drop that
+            # quote and append the rest so the literal closes as one; otherwise a
+            # split word/token simply concatenates. Mirrors the parser's handling of
+            # the NIST K1WKA continuation shape, so the oracle isn't weaker here.
+            open_lit = (pending.count("'") + pending.count('"')) % 2 == 1
+            if open_lit and stripped[:1] in ("'", '"'):
+                pending += stripped[1:]
+            else:
+                pending += stripped
+            continue
+        if not stripped:
+            continue
+        if pending is not None:
+            res.append(pending)
+        pending = stripped
+    if pending is not None:
+        res.append(pending)
     return res
 
 def first_level_and_name(dl):
@@ -90,14 +123,26 @@ def gnucobol_total(cpy):
             f'           DISPLAY "LEN=" LENGTH OF {rec}.\n           STOP RUN.\n')
     with tempfile.TemporaryDirectory() as d:
         src = os.path.join(d, "orc.cob"); open(src, "w").write(prog)
+        r = None
         for free in (["-free"], []):  # try free then fixed
-            r = subprocess.run(["cobc", "-x", "-std=mvs", "-o", os.path.join(d, "orc"), src] + free,
-                               capture_output=True, text=True, cwd=d)
+            try:
+                r = subprocess.run(["cobc", "-x", "-std=mvs", "-o", os.path.join(d, "orc"), src] + free,
+                                   capture_output=True, text=True, cwd=d, timeout=60)
+            except subprocess.TimeoutExpired:
+                return ("ERR", "cobc compile timed out (>60s)")
             if r.returncode == 0:
-                run = subprocess.run([os.path.join(d, "orc")], capture_output=True, text=True, cwd=d)
+                try:
+                    run = subprocess.run([os.path.join(d, "orc")], capture_output=True, text=True, cwd=d, timeout=15)
+                except subprocess.TimeoutExpired:
+                    return ("ERR", "compiled program timed out (>15s)")
                 m = re.search(r'LEN=\s*0*(\d+)', run.stdout)
                 if m: return ("OK", int(m.group(1)))
-        return ("ERR", r.stderr.strip().splitlines()[-1][:80] if r.stderr else "compile failed")
+        # Prefer cobc's actual "error:" line (its stderr sometimes ends on a source
+        # echo, not the diagnosis) so the itemized reason in main() is meaningful.
+        elines = r.stderr.strip().splitlines() if r and r.stderr else []
+        reason = next((l.strip() for l in reversed(elines) if "error:" in l.lower()),
+                      elines[-1].strip() if elines else "compile failed")
+        return ("ERR", reason[:100])
 
 def main():
     if len(sys.argv) < 2:
@@ -108,10 +153,10 @@ def main():
     if not files: sys.exit(f"no copybooks under {cbdir}")
     dll = build_picasso_layout()
     ptot = picasso_totals(dll, files)
-    agree = disagree = err = 0; mism = []; errs = []
+    agree = disagree = err = rejected = 0; mism = []; errs = []
     for f in files:
-        if f not in ptot:  # PICASSO rejected it — not comparable here
-            continue
+        if f not in ptot:  # PICASSO rejected/errored on it — not comparable here
+            rejected += 1; continue
         status, val = gnucobol_total(f)
         if status != "OK":
             err += 1; errs.append((f, val)); continue
@@ -119,10 +164,20 @@ def main():
             agree += 1
         else:
             disagree += 1; mism.append((f, ptot[f], val))
-    print(f"AGREE={agree}  DISAGREE={disagree}  COBC_UNCOMPARABLE={err}")
+    # The four counts add up to the copybook total, so coverage is explicit.
+    print(f"AGREE={agree}  DISAGREE={disagree}  COBC_UNCOMPARABLE={err}  PICASSO_REJECTED={rejected}")
     if mism:
         print("\n=== total-length mismatches (PICASSO vs GnuCOBOL) ===")
         for f, p, g in mism: print(f"  {os.path.relpath(f, cbdir)}: PICASSO={p} GnuCOBOL={g} (delta {p-g})")
+    if errs:
+        # Itemize the uncomparable bucket WITH each cobc reason. A harness/normalization
+        # failure (the fixed-format and continuation blind spots both lived here) reads
+        # just like a genuine cobc limitation in a bare count — so print the reasons and
+        # read them; a low DISAGREE is NOT "all clear" until this list is understood.
+        print("\n=== COBC_UNCOMPARABLE — cobc could not build these (reason per file) ===")
+        print("    Not automatically PICASSO's fault, and not automatically cobc's:")
+        print("    a broken-input harness failure hides here as easily as a real limit.")
+        for f, reason in errs: print(f"  {os.path.relpath(f, cbdir)}: {reason}")
     print("\n(See the COMP-5 caveat in this script's docstring before treating a "
           "1-byte delta as a PICASSO defect.)")
 

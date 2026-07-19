@@ -27,16 +27,38 @@ It parses every `*.cpy` / `*.cbl` / `*.cob` under the directory, and for each
 one that **PICASSO parses**, compares total record length against GnuCOBOL:
 
 ```
-AGREE=74  DISAGREE=14  COBC_UNCOMPARABLE=20
+AGREE=57  DISAGREE=0  COBC_UNCOMPARABLE=14  PICASSO_REJECTED=408
 
 === total-length mismatches (PICASSO vs GnuCOBOL) ===
   jrecord/Numeric.cbl: PICASSO=29 GnuCOBOL=28 (delta 1)
   ...
+
+=== COBC_UNCOMPARABLE — cobc could not build these (reason per file) ===
+  ballerinax/copybook-11.cpy: ... error: syntax error, unexpected NO ...
+  ...
 ```
 
-`COBC_UNCOMPARABLE` covers copybooks GnuCOBOL couldn't compile in this harness
-(fixed-format quirks, or genuinely GnuCOBOL-rejected constructs like ODO), not
-PICASSO problems.
+The four counts add up to the copybook total, so coverage is explicit:
+
+- `AGREE` / `DISAGREE` — PICASSO's whole-record length matched / didn't match a
+  real compiler. **Trust these:** the two sides read the copybook by independent
+  code and compute the layout independently (PICASSO's parser vs cobc), so an
+  agreement means two implementations concur.
+- `COBC_UNCOMPARABLE` — cobc couldn't build the file. This is now **itemized with
+  each cobc error**, on purpose: a genuine cobc limitation (an unsupported
+  construct, a `PICTURE clause required`) and a *harness self-failure* (this
+  script mis-normalizing its own input) read identically as a bare count — and
+  that opacity is exactly what once hid a fixed-format blind spot. Read the
+  reasons; a low `DISAGREE` is **not** "all clear" until this list is understood.
+- `PICASSO_REJECTED` — PICASSO itself rejected the file (a procedure copybook, an
+  unsupported construct, a malformed layout); nothing to compare.
+
+To stay a real check, `oracle.py`'s own copybook normalization is **independent**
+of PICASSO's (deliberately — see the note in `data_lines`) but kept at least as
+capable: it handles fixed-format numeric sequence areas and col-7 `-` continuation
+lines, so it isn't silently weaker than the parser it validates. Every subprocess
+(cobc, the compiled probe, the dotnet build/dump) runs under a timeout, so one
+pathological file can't wedge a corpus run.
 
 ## How it works
 
