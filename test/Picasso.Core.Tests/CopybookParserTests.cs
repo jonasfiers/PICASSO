@@ -632,6 +632,22 @@ public class CopybookParserTests
     }
 
     /// <summary>
+    /// OCCURS is illegal on a level-01 (a record) or level-77 (a standalone item):
+    /// neither may repeat. PICASSO used to silently expand it (a 12-byte record for
+    /// `01 X PIC 9(3) OCCURS 4`), disagreeing with a real compiler; now it rejects.
+    /// A repeating item belongs under a group (an 05 OCCURS inside an 01).
+    /// </summary>
+    [Theory]
+    [InlineData("01  X PIC 9(3) OCCURS 4 TIMES.")]
+    [InlineData("77  Y PIC 9 OCCURS 3 TIMES.")]
+    [InlineData("01  Z PIC 9(2) OCCURS 0 TO 5 DEPENDING ON N.")]
+    public void OccursOnAnO1OrO77LevelIsRejected(string line)
+    {
+        var ex = Assert.Throws<FormatException>(() => CopybookParser.Parse(line + "\n"));
+        Assert.Contains("OCCURS is not allowed on a level-", ex.Message);
+    }
+
+    /// <summary>
     /// The empty-record guard must not misfire when a real field is present
     /// alongside an 88 that carries no storage: field A survives, the 88 is
     /// ignored, and the layout parses.

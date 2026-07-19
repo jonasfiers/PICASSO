@@ -884,6 +884,7 @@ public static class CopybookParser
         var occursCount = 1;
         string? redefinesTarget = null;
         var isOdo = false;
+        var sawOccurs = false;
         var odoMin = 0;
         var odoMax = 0;
         string? odoDependsOn = null;
@@ -959,6 +960,7 @@ public static class CopybookParser
 
                 case "OCCURS":
                 {
+                    sawOccurs = true;
                     // Two OCCURS shapes reach here:
                     //   fixed:    OCCURS n [TIMES]
                     //   variable: OCCURS [m TO] n [TIMES] DEPENDING ON dep   (ODO)
@@ -1294,6 +1296,17 @@ public static class CopybookParser
                 Signed = namedBinarySigned,
                 Len = namedBinaryWidth.Value,
             };
+
+        // OCCURS is illegal on an 01- or 77-level item: level 01 is a record (a
+        // group or a whole elementary record) and 77 is a standalone item — neither
+        // may repeat. A compiler rejects it; PICASSO used to silently expand it (so
+        // `01 X PIC 9(3) OCCURS 4` became a 12-byte record), which disagreed with
+        // GnuCOBOL's `LENGTH OF` and hid a malformed copybook. Reject it by name.
+        if (sawOccurs && (level == 1 || level == 77))
+            throw new FormatException(
+                $"OCCURS is not allowed on a level-{level:D2} item: '{name}' in \"{statement}\". A level-01 " +
+                "record and a level-77 standalone item cannot repeat — put the repeating item under a group " +
+                "(e.g. an 05 with OCCURS inside an 01), or correct the level number.");
 
         return new ParsedStatement
         {
