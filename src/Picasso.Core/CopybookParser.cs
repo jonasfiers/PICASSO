@@ -415,6 +415,48 @@ public static class CopybookParser
     private static readonly Regex UnknownComputationalUsage =
         new Regex(@"^(COMP|COMPUTATIONAL)-?[0-9]+$", RegexOptions.Compiled);
 
+    /// <summary>
+    /// Clause-introducing keywords that can legally appear immediately after a level
+    /// number when the data-name is OMITTED (an unnamed FILLER, e.g.
+    /// <c>02 PIC X(4) VALUE '1420'.</c>). All are COBOL reserved words, so none can
+    /// ever be a user data-name — a token matching one here unambiguously means the
+    /// name was elided. The risk is only ever MISSING an entry (a still-loud false
+    /// rejection, tolerable), never wrongly FILLER-ing a named item. A COMP-shaped
+    /// usage typo (COMPUTATIONAL3, COMP-7 …) is also treated as an omitted name via
+    /// <see cref="UnknownComputationalUsage"/> so the clause loop's default case can
+    /// then reject the bad usage loudly rather than the (absent) name.
+    /// REDEFINES is handled by its own explicit branch before this set is consulted;
+    /// it is listed here only for completeness of intent.
+    /// </summary>
+    private static readonly HashSet<string> ClauseIntroducingKeywords =
+        new(StringComparer.OrdinalIgnoreCase)
+        {
+            "PIC", "PICTURE",
+            "USAGE",
+            "DISPLAY", "DISPLAY-1",
+            "COMP", "COMPUTATIONAL",
+            "COMP-1", "COMP-2", "COMP-3", "COMP-4", "COMP-5", "COMP-6", "COMP-X",
+            "COMPUTATIONAL-1", "COMPUTATIONAL-2", "COMPUTATIONAL-3",
+            "COMPUTATIONAL-4", "COMPUTATIONAL-5", "COMPUTATIONAL-6", "COMPUTATIONAL-X",
+            "BINARY", "BINARY-CHAR", "BINARY-SHORT", "BINARY-LONG", "BINARY-DOUBLE",
+            "BINARY-C-LONG",
+            "PACKED-DECIMAL",
+            "OCCURS",
+            "REDEFINES",
+            "VALUE", "VALUES",
+            "SIGN",
+            "SYNC", "SYNCHRONIZED",
+            "JUST", "JUSTIFIED",
+            "BLANK",
+            "POINTER",
+            "PROCEDURE-POINTER", "FUNCTION-POINTER", "PROGRAM-POINTER",
+            "INDEX",
+            "NATIONAL",
+            "UTF-8",
+            "OBJECT",
+            "GLOBAL", "EXTERNAL",
+        };
+
     /// <summary>Columns 8-72 of a fixed-format line, once columns 1-6 are gone.</summary>
     private const int FixedFormatCodeLength = 66;
 
@@ -1079,6 +1121,23 @@ public static class CopybookParser
             name = "FILLER";
             redefinesTarget = tokens[2];
             i = 3; // resume clause scanning after "REDEFINES <target>"
+        }
+        else if (ClauseIntroducingKeywords.Contains(tokens[1])
+                 || UnknownComputationalUsage.IsMatch(tokens[1].ToUpperInvariant()))
+        {
+            // Omitted data-name: the token right after the level number is a clause
+            // keyword, not a name — "<level> PIC X(4) VALUE '1420'." and the like.
+            // COBOL (and GnuCOBOL) treat the elided name as an unnamed FILLER; this
+            // is the general form of the nameless-REDEFINES case handled above. Begin
+            // clause scanning at tokens[1] (i = 1) so the existing while-loop parses
+            // PIC / USAGE / VALUE / OCCURS / … exactly as for a named item. Since
+            // every entry here is a reserved word (never a valid user data-name),
+            // this can only ever FILLER an item whose name was truly omitted — a
+            // named item's name never matches, so it is unaffected. A COMP-shaped
+            // usage typo is included so the clause loop can reject the bad usage
+            // loudly rather than mis-take it for the (absent) name.
+            name = "FILLER";
+            i = 1;
         }
         else
         {
