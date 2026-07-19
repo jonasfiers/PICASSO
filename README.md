@@ -8,7 +8,7 @@ It's built to become an **OutSystems Integration Studio Extension**, but this re
 
 *The .NET implementation was written by Claude (Anthropic), directed and verified throughout by [Jonas Fiers](https://github.com/jonasfiers) — see [Contributions](#contributions).*
 
-**Every layout it derives is cross-checked against GnuCOBOL — a real COBOL compiler — and round-tripped through a genuine 1990s mainframe file whose expected values were published by an independent tool.** See [How it's validated](#how-its-validated).
+**Layouts are cross-checked against GnuCOBOL — a real COBOL compiler — and round-tripped through a genuine 1990s mainframe file whose expected values were published by an independent tool.** See [How it's validated](#how-its-validated).
 
 ## Why this exists
 
