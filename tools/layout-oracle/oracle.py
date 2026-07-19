@@ -46,11 +46,26 @@ def picasso_totals(dll, files):
 def data_lines(path):
     res = []
     for raw in open(path, encoding='latin-1'):
-        line = raw.rstrip("\n")
-        if line.strip().startswith('*'): continue
-        if len(line) >= 7 and line[6] == '*': continue
-        if not line.strip(): continue
-        res.append(line.strip())
+        line = raw.rstrip("\r\n")
+        # Fixed-format with a NUMERIC sequence area (cols 1-6 all digits, e.g.
+        # DTAR020's 000100/000200/...): col 7 is the indicator, cols 8-72 the code,
+        # cols 73-80 an identification area to drop. Strip to the code so the level
+        # number is visible to the tokenizer. Only the numeric-sequence signal is
+        # trusted — an all-blank sequence area is indistinguishable from free-format
+        # indentation (6 leading spaces before a level number), so those lines are
+        # left as-is rather than risk mangling a valid free-format copybook.
+        if len(line) >= 7 and line[:6].isdigit():
+            if line[6] in ('*', '/'):     # fixed-format comment line
+                continue
+            code = line[7:72]             # cols 8-72
+        else:
+            if line.strip().startswith('*'):   # free-format / area-A comment
+                continue
+            if len(line) >= 7 and line[6] == '*':
+                continue
+            code = line
+        if not code.strip(): continue
+        res.append(code.strip())
     return res
 
 def first_level_and_name(dl):

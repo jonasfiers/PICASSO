@@ -51,6 +51,16 @@ PICASSO problems.
 and little-endian on x86; `mvs` gives the mainframe 2/4/8 big-endian sizing
 PICASSO targets.
 
+**Fixed-format copybooks are handled.** A line whose columns 1–6 are a numeric
+sequence area (e.g. DTAR020's `000100`/`000200`/…) is stripped to its code
+(cols 8–72, the col-7 indicator honoured) before tokenizing, so a fixed-format
+copybook is comparable, not silently dropped into `COBC_UNCOMPARABLE`. (Earlier
+this harness compared only free-format copybooks — fixed-format ones failed the
+level-number tokenizer and were counted uncomparable, so the flagship DTAR020 was
+never actually cross-checked here; it now agrees at 27 bytes. An *all-blank*
+sequence area is deliberately left as-is: it's indistinguishable from free-format
+indentation, and mis-stripping it would mangle a valid free-format line.)
+
 ## Known dialect caveat — COMP-5 (read before filing a "bug")
 
 GnuCOBOL sizes `COMP-5` **byte-granularly** even under `-std=mvs`: a 1–2 digit
