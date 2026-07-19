@@ -1543,10 +1543,11 @@ public static class CopybookParser
                 var parent = stack[stack.Count - 1];
                 if (parent.Field is not null)
                     throw new FormatException(
-                        $"Item '{parent.Name}' (level {parent.LevelNumber:D2}) has a PICTURE but also a " +
+                        $"Item '{parent.Name}' (level {parent.LevelNumber:D2}) is an elementary item (it " +
+                        $"defines its own value — a PICTURE or a fixed-width binary USAGE) but also has a " +
                         $"subordinate item '{node.Name}' (level {node.LevelNumber:D2}). An elementary item " +
-                        $"with a PIC clause cannot contain sub-items — fix the level numbers or remove the " +
-                        $"PIC. (A group item carries no PICTURE; only its elementary children do.)");
+                        $"cannot contain sub-items — fix the level numbers, or remove the PIC/USAGE so it is " +
+                        $"a group. (A group item defines no value of its own; only its elementary children do.)");
                 parent.Children.Add(node);
             }
 

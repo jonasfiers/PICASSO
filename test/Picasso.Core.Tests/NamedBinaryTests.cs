@@ -135,6 +135,33 @@ public class NamedBinaryTests
     }
 
     [Fact]
+    public void UnsignedDoublewordMaxRoundTrips()
+    {
+        // 2^64 - 1, the largest unsigned doubleword. The riskiest boundary: the
+        // magnitude is assembled into a ulong then a decimal, so a float path here
+        // would lose precision. 0xFF x 8 must decode to exactly 18446744073709551615.
+        const decimal max = 18446744073709551615m;
+        var parsed = CopybookParser.Parse("01  R.\n    05  A BINARY-DOUBLE UNSIGNED.\n");
+        var encoded = EncodeFixed(parsed, new Dictionary<string, object> { ["A"] = max });
+        Assert.Equal(L1(0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF), encoded);
+        Assert.Equal(max, DecodeFixed(parsed, encoded)[0]["A"]);
+    }
+
+    [Fact]
+    public void VerboseUsageIsFormSizesIdentically()
+    {
+        // The wordy "USAGE IS <name>" spelling must size exactly like the bare form:
+        // the "IS" is a noise word, BINARY-LONG is still 4 bytes, UNSIGNED still flips
+        // the sign — the qualifier after the usage name is consumed either way.
+        var parsed = CopybookParser.Parse("01  R.\n    05  A USAGE IS BINARY-LONG UNSIGNED.\n");
+        var f = Assert.Single(parsed.Flat);
+        Assert.Equal(FieldType.Binary, f.Type);
+        Assert.Equal(4, f.Len);
+        Assert.Equal(0, f.Digits);
+        Assert.False(f.Signed);
+    }
+
+    [Fact]
     public void NegativeValueIntoUnsignedFieldFailsLoud()
     {
         var parsed = CopybookParser.Parse("01  R.\n    05  A BINARY-CHAR UNSIGNED.\n");
