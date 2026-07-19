@@ -49,6 +49,16 @@ def picasso_totals(dll, files):
         if m: out[m.group(1)] = int(m.group(2))
     return out
 
+def _code_completes_stmt(code):
+    # True when cols 1-72 already complete a COBOL statement (balanced quotes, ends
+    # with the '.' terminator) — so anything in cols 73-80 is the identification area
+    # and safe to drop. A free-format line whose real content runs past col 72 has no
+    # terminating '.' here, so it returns False and the line is left intact.
+    area = code[:72]
+    if (area.count("'") + area.count('"')) % 2 != 0:
+        return False
+    return area.rstrip().endswith('.')
+
 def data_lines(path):
     # NOTE: this is a SEPARATE, independent re-normalization of the copybook from
     # PICASSO's own — deliberately so. The oracle's value is that cobc reaches the
@@ -79,6 +89,16 @@ def data_lines(path):
             if len(line) >= 7 and line[6] == '*':
                 continue
             code = line
+            # Cols 73-80 identification area on a blank-sequence line — the compiler
+            # ignores it whatever it holds (a sequence number, a label, a POSITION/
+            # offset annotation). Drop it when col 72 is blank and either the tail is
+            # digits/spaces or the code area already completes a statement, so a
+            # free-format line with real content past col 72 is left intact. Mirrors
+            # the parser, keeping this independent reader at parity with it.
+            if len(code) > 72 and code[71] == ' ' and (
+                    all(c == ' ' or c.isdigit() for c in code[72:])
+                    or _code_completes_stmt(code)):
+                code = code[:72]
         stripped = code.strip()
         if cont and pending is not None:
             # Continue the previous logical line. If it left a literal open (odd

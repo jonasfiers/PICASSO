@@ -535,21 +535,26 @@ public static class CopybookParser
                 }
             }
 
-            // Separated columns-73-80 identification area on a line whose
-            // columns-1-6 sequence area is BLANK (so the numeric-cols-1-6 path
-            // above never fired and never truncated it). Many real fixed-format
-            // copybooks leave cols 1-6 blank yet still carry an 8-digit sequence
-            // number in cols 73-80; left in place it leaks into the tokenizer and
-            // falsely rejects a valid layout. Strip it CONSERVATIVELY — only when
-            // everything past column 72 is digits/spaces AND column 72 itself is a
-            // space, i.e. a blank gap separates the code from the trailing number.
-            // That space gap is what distinguishes a genuine identification field
-            // from free-format content (e.g. a numeric VALUE literal running past
-            // column 72 has no space immediately before its digits), so genuine
-            // free-format lines are never truncated.
+            // Columns 73-80 are the fixed-format IDENTIFICATION AREA, which a real
+            // compiler ignores WHATEVER it holds — a sequence number, a program
+            // label, or a human annotation (some real copybooks tabulate each
+            // field's byte position under a "POSITION" header there). We only reach
+            // here on a line whose cols-1-6 sequence area is BLANK (the numeric
+            // cols-1-6 path above already handled the other case). Left in place the
+            // identification text leaks into the tokenizer and falsely rejects a
+            // valid layout. Strip it — but only on signals that make it safe on
+            // free-format source, since PICASSO auto-detects the two formats:
+            //   (a) column 72 is blank — a gap separates the tail from the code; and
+            //   (b) EITHER the tail past col 72 is all digits/spaces (a classic
+            //       sequence number), OR the code area (cols 1-72) already COMPLETES
+            //       a statement (balanced quotes, ends with the '.' terminator).
+            // Condition (b)'s second half is the key: a free-format line whose real
+            // content (a USAGE clause, a long literal) runs past column 72 has no
+            // terminating '.' before col 73, so it is left intact rather than
+            // truncated — real code is never cut, only a genuinely separate tail.
             if (line.Length > CodeAreaEndColumn
                 && line[CodeAreaEndColumn - 1] == ' '
-                && IsSeparatedIdentificationArea(line))
+                && (IsSeparatedIdentificationArea(line) || CodeAreaCompletesAStatement(line)))
             {
                 line = line.Substring(0, CodeAreaEndColumn);
             }
@@ -714,6 +719,35 @@ public static class CopybookParser
                 return false;
         }
         return true;
+    }
+
+    /// <summary>
+    /// True when the code area (columns 1-72) already completes a COBOL statement:
+    /// its quote delimiters are balanced (nothing is left inside an open literal)
+    /// and, right-trimmed, it ends with the '.' terminator. When both hold, anything
+    /// in columns 73-80 is necessarily POST-statement — the identification area —
+    /// and safe to drop whatever it contains. The converse is the safety guarantee:
+    /// a free-format line whose real content (a USAGE clause, a literal) continues
+    /// past column 72 has no terminating '.' within the code area, so this returns
+    /// false and the line is left intact rather than truncated mid-statement.
+    /// </summary>
+    private static bool CodeAreaCompletesAStatement(string line)
+    {
+        var end = Math.Min(line.Length, CodeAreaEndColumn);
+        var quotes = 0;
+        for (var i = 0; i < end; i++)
+            if (line[i] == '\'' || line[i] == '"')
+                quotes++;
+        if (quotes % 2 != 0)   // an open literal straddles into cols 73-80 — don't cut it
+            return false;
+        // Ends with '.' (ignoring trailing blanks within the code area)?
+        for (var i = end - 1; i >= 0; i--)
+        {
+            if (line[i] == ' ')
+                continue;
+            return line[i] == '.';
+        }
+        return false;   // code area is blank — nothing completed
     }
 
     /// <summary>

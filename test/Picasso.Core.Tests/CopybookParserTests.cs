@@ -114,6 +114,47 @@ public class CopybookParserTests
     }
 
     [Fact]
+    public void StripsCols73IdentificationTextWhenCols1To6BlankAndStatementCompletes()
+    {
+        // Cols 1-6 blank, and cols 73-80 hold a human ANNOTATION (a "POSITION"
+        // header, a per-field byte offset) rather than a numeric sequence — a real
+        // convention (the Texas RRC well-data copybook does exactly this). A compiler
+        // ignores the identification area whatever it holds; PICASSO now does too,
+        // because the code area (cols 1-72) already completes the statement (ends
+        // with '.'). Previously the alphabetic "POSITION" leaked and falsely rejected.
+        var source =
+            "       01 REC.".PadRight(72) + "POSITION\n" +
+            "          05 A PIC X(3).".PadRight(72) + "1\n" +
+            "          05 B PIC 9(4).".PadRight(72) + "4\n";
+
+        var parsed = CopybookParser.Parse(source);
+
+        Assert.Equal(new[] { "A", "B" }, parsed.Flat.Select(f => f.Name));
+        Assert.Equal(7, parsed.Root.Len);
+        Assert.DoesNotContain("POSITION", CopybookParser.StripComments(source));
+    }
+
+    [Fact]
+    public void DoesNotTruncateFreeFormatUsageClausePastColumn72()
+    {
+        // SAFETY GUARD for the rule above: a FREE-format line whose USAGE clause
+        // legitimately runs past column 72. The statement does NOT complete before
+        // col 73 (no terminating '.'), so the identification-area strip must leave
+        // the line intact — truncating at column 72 would drop "COMP-3." and
+        // silently mis-size the field as 5-byte DISPLAY instead of 3-byte packed.
+        var field = "05 BIGFIELD PIC S9(5)".PadRight(72) + "COMP-3.";
+        Assert.Equal(' ', field[71]);     // column 72 is blank (the gap signal)
+        Assert.True(field.Length > 72);   // real code past column 72
+
+        var parsed = CopybookParser.Parse("01 REC.\n" + field + "\n");
+
+        var f = Assert.Single(parsed.Flat);
+        Assert.Equal("BIGFIELD", f.Name);
+        Assert.Equal(FieldType.Comp3, f.Type);   // COMP-3 survived — not truncated away
+        Assert.Equal(3, f.Len);                  // 3-byte packed, not 5-byte DISPLAY
+    }
+
+    [Fact]
     public void FreeFormatLineUnderColumn72IsUntouched()
     {
         // A short free-format line never reaches the cols-73 rule.
