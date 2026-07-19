@@ -53,6 +53,19 @@ public class RoundtripTests
         Assert.Equal(Encoding.Latin1.GetBytes(expected), Encoding.Latin1.GetBytes(actual));
     }
 
+    [Fact]
+    public void SpaceFilledNumericFieldFailsLoudWithFieldName()
+    {
+        // A blank / space-filled DISPLAY numeric (an "unset" field in real extracts)
+        // is NOT auto-zeroed — it fails loud, and the message names the field rather
+        // than surfacing a bare, context-free .NET FormatException.
+        var parsed = CopybookParser.Parse("01  R.\n    05  QTY PIC 9(3).\n");
+        var ex = Assert.Throws<System.FormatException>(() =>
+            FlatFileCodec.Decode(parsed.Flat, "   ", CharacterEncoding.Latin1, RecordFormat.FixedLength));
+        Assert.Contains("'QTY'", ex.Message);
+        Assert.Contains("DISPLAY numeric", ex.Message);
+    }
+
     [Theory]
     [MemberData(nameof(CopybookAndData))]
     public void RealSeedDataSurvivesDecodeEncode(string copybookFileName, string dataFileName)

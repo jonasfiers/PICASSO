@@ -493,7 +493,21 @@ public static class FlatFileCodec
             digitsText = raw;
         }
 
-        var magnitude = decimal.Parse(digitsText) / Pow10(field.Scale);
+        // digitsText is the magnitude, all digits (any separate/overpunch sign has
+        // been stripped above). A blank or space-filled numeric — common in real
+        // extracts for an "unset" field — or any non-digit content lands here. Rather
+        // than let decimal.Parse throw a bare, context-free .NET FormatException,
+        // fail loud with the field named: a blank numeric is NOT auto-zeroed (that
+        // would be a silent guess), and non-numeric bytes mean the record doesn't
+        // match the copybook at this offset.
+        if (!decimal.TryParse(digitsText, System.Globalization.NumberStyles.None,
+                System.Globalization.CultureInfo.InvariantCulture, out var parsed))
+            throw new FormatException(
+                $"Field '{field.Name}' is a DISPLAY numeric (PIC with {field.Digits} digits) but its bytes " +
+                $"\"{raw}\" are not all digits. A blank or space-filled numeric is not auto-zeroed, and " +
+                "non-numeric content means the data does not line up with the copybook at this field — check " +
+                "the record layout, offset, or text encoding.");
+        var magnitude = parsed / Pow10(field.Scale);
         return negative ? -magnitude : magnitude;
     }
 
