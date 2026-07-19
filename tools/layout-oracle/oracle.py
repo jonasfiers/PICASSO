@@ -59,6 +59,44 @@ def _code_completes_stmt(code):
         return False
     return area.rstrip().endswith('.')
 
+def _seq_cols(line):
+    # True when cols 1-6 (indices 0-5) are only digits and spaces with at least one
+    # digit — a short or space-padded line number like "00000 " (five zeros + a space),
+    # "000010", or "12   ". A letter in cols 1-6 (a free-format DATA-NAME) or an all-
+    # blank area (indistinguishable from free-format indentation) is excluded.
+    if len(line) < 8:
+        return False
+    area = line[:6]
+    return any(c.isdigit() for c in area) and all(c == ' ' or c.isdigit() for c in area)
+
+def _opens_with_level(code):
+    # True when the code area opens with a COBOL level number (1-2 digits, then a
+    # blank or end-of-line).
+    c = code.lstrip()
+    d = 0
+    while d < len(c) and c[d].isdigit():
+        d += 1
+    return 1 <= d <= 2 and (d == len(c) or c[d] == ' ')
+
+def _numeric_spaced_seq(line):
+    # A fixed-format line carrying a numeric-spaced sequence area (see _seq_cols) AND
+    # the fixed-format signature: col 7 is a '*','-','/' indicator, or is blank/'D' with
+    # the code area opening on a level number. A real compiler ignores the sequence
+    # area's content, so such a line is legal fixed-format even though it is not six
+    # solid digits. The digits/spaces-only test plus the indicator/level guard is what
+    # keeps a genuine free-format line (whose cols 1-6 carry the DATA-NAME's letters, or
+    # are all-blank indentation) from being misread. Mirrors the parser's
+    # HasNumericSpacedSequenceArea; kept an INDEPENDENT reimplementation so the oracle
+    # stays at parity with, not weaker than, the reader it checks.
+    if not _seq_cols(line):
+        return False
+    ind = line[6]
+    if ind in ('*', '-', '/'):
+        return True
+    if ind not in (' ', 'D', 'd'):
+        return False
+    return _opens_with_level(line[7:])
+
 def data_lines(path):
     # NOTE: this is a SEPARATE, independent re-normalization of the copybook from
     # PICASSO's own — deliberately so. The oracle's value is that cobc reaches the
@@ -78,7 +116,19 @@ def data_lines(path):
         # is trusted — an all-blank sequence area is indistinguishable from free-format
         # indentation (6 leading spaces before a level number), so those lines are
         # left as-is rather than risk mangling a valid free-format copybook.
-        if len(line) >= 7 and line[:6].isdigit():
+        # A numeric-spaced sequence area whose code area does NOT open with a level
+        # number, sitting on an OPEN statement (the previous line had no terminating
+        # '.'), is an IMPLICIT continuation — e.g. a field's PIC placed on its own line
+        # under an OCCURS. Its cols 1-6 must still be stripped or cobc reads the leading
+        # sequence digits as garbage code. line[0].isdigit() (a left-aligned sequence
+        # number) guards a free-format indented level ("    05 X") from being mis-taken
+        # for one; the leftover is emitted as its own line and cobc's free mode joins it
+        # onto the open statement across the newline.
+        spaced_cont = (not _numeric_spaced_seq(line) and _seq_cols(line)
+                       and line[0].isdigit() and line[6] in (' ', 'D', 'd')
+                       and not _opens_with_level(line[7:])
+                       and pending is not None and not pending.rstrip().endswith('.'))
+        if (len(line) >= 7 and line[:6].isdigit()) or _numeric_spaced_seq(line) or spaced_cont:
             if line[6] in ('*', '/'):     # fixed-format comment line
                 continue
             cont = (line[6] == '-')       # col-7 continuation of the previous line

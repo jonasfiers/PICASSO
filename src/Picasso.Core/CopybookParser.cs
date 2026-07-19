@@ -482,7 +482,8 @@ public static class CopybookParser
             var line = rawLine;
             var continuation = false;
 
-            if (FixedFormatSequenceNumber.IsMatch(line) || HasAlphanumericSequenceArea(line))
+            if (FixedFormatSequenceNumber.IsMatch(line) || HasAlphanumericSequenceArea(line)
+                || HasNumericSpacedSequenceArea(line))
             {
                 line = line.Substring(6);
                 if (line.Length > FixedFormatCodeLength)
@@ -681,9 +682,53 @@ public static class CopybookParser
         for (var i = 0; i < 6; i++)
             if (!char.IsLetterOrDigit(line[i])) return false;
 
+        return HasFixedFormatIndicatorAndLevel(line);
+    }
+
+    /// <summary>
+    /// True when columns 1-6 are a fixed-format sequence area made only of digits and
+    /// spaces, with at least one digit — a short or space-padded line number such as
+    /// "00000 " (five zeros + a space), "000010", or "12    ". A real compiler ignores
+    /// the sequence area's content, so such a line is legal fixed-format even though it
+    /// is neither six solid digits (<see cref="FixedFormatSequenceNumber"/>) nor six
+    /// non-space characters (<see cref="HasAlphanumericSequenceArea"/>).
+    ///
+    /// The digits/spaces-only test (no letters) plus the shared
+    /// <see cref="HasFixedFormatIndicatorAndLevel"/> guard is what keeps a genuine
+    /// FREE-format line from being misread and truncated: a free-format data entry
+    /// opens with a level number then the DATA-NAME, so its columns 1-6 carry the
+    /// name's LETTERS ("05  PA"), which this never accepts; and an all-blank sequence
+    /// area (no digit) is indistinguishable from free-format indentation, so it is
+    /// deliberately NOT matched here (the &gt;=1-digit requirement excludes it).
+    /// </summary>
+    private static bool HasNumericSpacedSequenceArea(string line)
+    {
+        if (line.Length < 8) return false;
+        var sawDigit = false;
+        for (var i = 0; i < 6; i++)
+        {
+            var c = line[i];
+            if (c == ' ') continue;
+            if (c < '0' || c > '9') return false;   // any letter/punct: not this shape
+            sawDigit = true;
+        }
+        if (!sawDigit) return false;   // all-blank area is ambiguous with free-format
+
+        return HasFixedFormatIndicatorAndLevel(line);
+    }
+
+    /// <summary>
+    /// The fixed-format signature that follows a recognised columns-1-6 sequence area:
+    /// column 7 is a comment ('*'), continuation ('-') or form-feed ('/') indicator, OR
+    /// it is blank/'D' (debug) and the code area (columns 8+) opens with a level number
+    /// (1-2 digits). Shared by the alphanumeric- and numeric-spaced-sequence detectors
+    /// so both apply the identical free-format guard.
+    /// </summary>
+    private static bool HasFixedFormatIndicatorAndLevel(string line)
+    {
         var indicator = line[6];
         // A comment ('*'), continuation ('-') or form-feed ('/') indicator after a
-        // six-char sequence area is itself the fixed-format signature.
+        // sequence area is itself the fixed-format signature.
         if (indicator == '*' || indicator == '-' || indicator == '/') return true;
         // Otherwise the indicator must be blank (or a debug 'D'), and the code area
         // must open with a level number.

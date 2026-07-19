@@ -884,6 +884,60 @@ public class CopybookParserTests
     }
 
     [Fact]
+    public void NumericSpacedSequenceAreaInCols1To6IsStripped()
+    {
+        // A real fixed-format copybook (royopa/python-cobol example.cbl) carries a
+        // short, space-padded line number in cols 1-6 — literally "00000 " (five zeros
+        // then a space) — plus an alphabetic identification area in cols 73-80. Cols
+        // 1-6 are the sequence area a compiler ignores whatever they hold, so this is
+        // legal COBOL (cobc compiles it). The six-solid-digit and six-solid-char rules
+        // both miss "00000 " (the space at col 6), so before this fix the sequence area
+        // and the cols-73-80 tail leaked into the tokenizer and falsely rejected it.
+        var source =
+            "00000  01  REC.".PadRight(72) + "AAAAAAAA\n" +
+            "00000      05 FLD-A PIC X(5).".PadRight(72) + "AAAAAAAA\n" +
+            "00000      05 FLD-B PIC 9(3).".PadRight(72) + "AAAAAAAA\n";
+
+        var parsed = CopybookParser.Parse(source);
+
+        Assert.Equal(new[] { "FLD-A", "FLD-B" }, parsed.Flat.Select(f => f.Name));
+        Assert.Equal(0, parsed.Flat[0].Start);
+        Assert.Equal(5, parsed.Flat[0].Len);
+        Assert.Equal(5, parsed.Flat[1].Start);
+        Assert.Equal(3, parsed.Flat[1].Len);
+        Assert.Equal(8, parsed.Flat.Max(f => f.Start + f.Len));
+        // The cols-73-80 identification tail is dropped, not leaked as a stray token.
+        Assert.DoesNotContain("AAAAAAAA", CopybookParser.StripComments(source));
+    }
+
+    [Fact]
+    public void IndentedFreeFormatLevelNumberIsNotMistakenForNumericSpacedSequence()
+    {
+        // SAFETY GUARD for the numeric-spaced-sequence rule. A free-format line indented
+        // so the level number sits INSIDE cols 1-6 — "    05  B ..." puts "05" at cols
+        // 5-6, so cols 1-6 ("    05") are digits/spaces with a digit, the same shape as
+        // a sequence area. Only the level-number guard tells them apart: a sequence area
+        // is followed by a level number in the code area, this line is not (its code
+        // opens with the DATA-NAME). Misreading it as fixed-format would strip cols 1-6,
+        // destroy the "05" level, and silently drop the field — the exact corruption the
+        // guard prevents. A correct parse (level 05 preserved) proves it is not misread.
+        var source =
+            "01  A-REC.\n" +
+            "    05  B PIC X(3).\n" +
+            "    05  C PIC 9(4).\n";
+        Assert.Equal("05", source.Split('\n')[1].Substring(4, 2)); // "05" sits at cols 5-6
+
+        var parsed = CopybookParser.Parse(source);
+
+        Assert.Equal(new[] { "B", "C" }, parsed.Flat.Select(f => f.Name));
+        Assert.Equal(0, parsed.Flat[0].Start);
+        Assert.Equal(3, parsed.Flat[0].Len);
+        Assert.Equal(3, parsed.Flat[1].Start);
+        Assert.Equal(4, parsed.Flat[1].Len);
+        Assert.Equal(7, parsed.Root.Len);
+    }
+
+    [Fact]
     public void OffColumnStarCommentBannerIsStripped()
     {
         // Fixed-format comments live in column 7, but many exported copybooks leave
