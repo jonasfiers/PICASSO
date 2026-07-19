@@ -209,6 +209,19 @@ public class NamedBinaryTests
         Assert.Contains("'A'", ex.Message);
     }
 
+    [Fact]
+    public void NamedBinaryUsageOnAGroupIsRejectedWithAnAccurateMessage()
+    {
+        // A named binary USAGE on a GROUP (it has subordinates) is not inherited to
+        // children in this parser. The rejection must say so — not misname the group
+        // as an "elementary item" — and point at stating the USAGE on each child.
+        var ex = Assert.Throws<FormatException>(() => CopybookParser.Parse(
+            "01  R.\n    05  GRP BINARY-LONG.\n        10  A.\n        10  B.\n"));
+        Assert.Contains("not inherited to subordinate", ex.Message);
+        Assert.Contains("'GRP'", ex.Message);
+        Assert.DoesNotContain("elementary item", ex.Message);
+    }
+
     // ---- Regression guard: the digit-derived COMP path is unchanged ----
 
     [Fact]

@@ -371,7 +371,7 @@ public class OdoTests
                 05  CNT PIC 9(2).
                 05  TAB PIC X(3) OCCURS 1 TO 5 DEPENDING ON NOPE.
         "));
-        Assert.Contains("does not exist", ex.Message);
+        Assert.Contains("does not name a plain elementary field", ex.Message);
         Assert.Contains("NOPE", ex.Message);
     }
 

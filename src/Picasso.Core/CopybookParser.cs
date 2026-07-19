@@ -312,8 +312,9 @@ public static class CopybookParser
                     "variable-length section begins, so it has to precede the table in the record.");
 
             throw new FormatException(
-                $"OCCURS ... DEPENDING ON '{dep}' (table '{odoNode.Name}') names a field that does not exist " +
-                "in the record. The depending field must be a plain elementary field defined before the table.");
+                $"OCCURS ... DEPENDING ON '{dep}' (table '{odoNode.Name}') does not name a plain elementary " +
+                "field defined before the table. The depending field must be a simple field — not a group, and " +
+                "not itself inside a table — that precedes the variable-length section, so its count is read first.");
         }
 
         return new OdoInfo(odoNode.Name, dep, odoNode.OdoMin, odoNode.OdoMax, prefixMatch);
@@ -1576,12 +1577,27 @@ public static class CopybookParser
                 // following offset shifted — a silent miscompute. Fail loudly instead.
                 var parent = stack[stack.Count - 1];
                 if (parent.Field is not null)
+                {
+                    // A named binary USAGE (BINARY-CHAR/SHORT/LONG/DOUBLE) on an item
+                    // that turns out to have subordinates is a group stating a usage
+                    // it means to pass DOWN. This parser does not inherit a named
+                    // binary width to children (unlike COMP-3/COMP group usage), so
+                    // say so specifically rather than calling the group "elementary".
+                    if (parent.Field.Type == FieldType.Binary && parent.Field.Digits == 0)
+                        throw new FormatException(
+                            $"Item '{parent.Name}' (level {parent.LevelNumber:D2}) states a named binary USAGE " +
+                            $"(BINARY-CHAR/SHORT/LONG/DOUBLE) but also has a subordinate item '{node.Name}' " +
+                            $"(level {node.LevelNumber:D2}). A named binary USAGE is not inherited to subordinate " +
+                            $"items here — state the USAGE on each elementary child directly (e.g. " +
+                            $"'{node.LevelNumber:D2} {node.Name} BINARY-LONG.'), not on the group.");
+
                     throw new FormatException(
                         $"Item '{parent.Name}' (level {parent.LevelNumber:D2}) is an elementary item (it " +
                         $"defines its own value — a PICTURE or a fixed-width binary USAGE) but also has a " +
                         $"subordinate item '{node.Name}' (level {node.LevelNumber:D2}). An elementary item " +
                         $"cannot contain sub-items — fix the level numbers, or remove the PIC/USAGE so it is " +
                         $"a group. (A group item defines no value of its own; only its elementary children do.)");
+                }
                 parent.Children.Add(node);
             }
 
