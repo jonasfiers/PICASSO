@@ -330,19 +330,6 @@ public class OdoTests
     }
 
     [Fact]
-    public void TwoOdoTablesInOneRecordAreRejected()
-    {
-        var ex = Assert.Throws<FormatException>(() => CopybookParser.Parse(@"
-            01  R.
-                05  C1 PIC 9(2).
-                05  T1 PIC X(3) OCCURS 1 TO 5 DEPENDING ON C1.
-                05  C2 PIC 9(2).
-                05  T2 PIC X(3) OCCURS 1 TO 5 DEPENDING ON C2.
-        "));
-        Assert.Contains("More than one OCCURS ... DEPENDING ON", ex.Message);
-    }
-
-    [Fact]
     public void OdoTableNestedInsideAFixedOccursIsRejected()
     {
         var ex = Assert.Throws<FormatException>(() => CopybookParser.Parse(@"
@@ -405,5 +392,230 @@ public class OdoTests
 
         Assert.Equal(viaFlat.Single()["A"], viaParsed.Single()["A"]);
         Assert.Equal(viaFlat.Single()["B"], viaParsed.Single()["B"]);
+    }
+
+    // ---- Multiple flat ODO tables in one record (left-to-right resolution) ----
+    //
+    // Two independent ODO tables per record, each with its own depending field
+    // defined ahead of it. The second table's dep field (C2) sits AFTER the first
+    // table, so its offset shifts with C1's count — an earlier count of 0 or 5
+    // moves C2, and reading it at the wrong offset would be a silent miscompute.
+    // Geometry per (C1, C2) is 6 + 3*C1 + 4*C2 bytes; every total below was
+    // confirmed against GnuCOBOL (cobc -x -std=mvs) LENGTH OF the record.
+
+    private const string TwoOdo = @"
+        01  R.
+            05  C1   PIC 9(2).
+            05  T1   PIC X(3) OCCURS 0 TO 5 DEPENDING ON C1.
+            05  C2   PIC 9(2).
+            05  T2   PIC X(4) OCCURS 0 TO 5 DEPENDING ON C2.
+            05  TAIL PIC X(2).
+    ";
+
+    private static Dictionary<string, object> BuildTwoOdoRecord(int c1, int c2)
+    {
+        var r = new Dictionary<string, object> { ["C1"] = (decimal)c1, ["C2"] = (decimal)c2, ["TAIL"] = "ZZ" };
+        for (var k = 1; k <= c1; k++) r[$"T1({k})"] = ("p" + k).PadRight(3);
+        for (var k = 1; k <= c2; k++) r[$"T2({k})"] = ("q" + k).PadRight(4);
+        return r;
+    }
+
+    [Fact]
+    public void TwoOdoTablesAreAcceptedAndListedInSourceOrder()
+    {
+        var parsed = CopybookParser.Parse(TwoOdo);
+        Assert.True(parsed.IsVariableLength);
+        Assert.Equal(new[] { "T1", "T2" }, parsed.Odos.Select(o => o.TableName));
+        Assert.Equal(new[] { "C1", "C2" }, parsed.Odos.Select(o => o.DependsOn));
+    }
+
+    [Theory]
+    [InlineData(0, 0, 6)]   // both empty
+    [InlineData(1, 1, 13)]
+    [InlineData(3, 2, 23)]
+    [InlineData(5, 0, 21)]  // first full, second empty
+    [InlineData(0, 5, 26)]  // first EMPTY — shifts C2's dep field to offset 2
+    public void TwoOdoConcreteLayoutTotalMatchesGnuCobolLength(int c1, int c2, int total)
+    {
+        var parsed = CopybookParser.Parse(TwoOdo);
+        var spec = CopybookParser.BuildConcreteLayout(parsed, new[] { c1, c2 });
+        Assert.Equal(total, spec.Sum(f => f.Len));
+    }
+
+    [Theory]
+    [InlineData(0, 0, CharacterEncoding.Latin1)]
+    [InlineData(1, 1, CharacterEncoding.Latin1)]
+    [InlineData(3, 2, CharacterEncoding.Latin1)]
+    [InlineData(5, 0, CharacterEncoding.Latin1)]
+    [InlineData(0, 5, CharacterEncoding.Latin1)]  // adversarial: first count 0
+    [InlineData(0, 0, CharacterEncoding.Ebcdic037)]
+    [InlineData(3, 2, CharacterEncoding.Ebcdic037)]
+    [InlineData(0, 5, CharacterEncoding.Ebcdic037)]
+    public void TwoOdoTablesRoundTripDelimited(int c1, int c2, CharacterEncoding encoding)
+    {
+        var parsed = CopybookParser.Parse(TwoOdo);
+        var record = BuildTwoOdoRecord(c1, c2);
+
+        var encoded = FlatFileCodec.Encode(parsed, new[] { record }, encoding);
+        Assert.Equal(6 + 3 * c1 + 4 * c2, encoded.TrimEnd('\n').Length);
+
+        var decoded = FlatFileCodec.Decode(parsed, encoded, encoding);
+        var got = Assert.Single(decoded);
+
+        Assert.Equal((decimal)c1, got["C1"]);
+        Assert.Equal((decimal)c2, got["C2"]);
+        Assert.Equal("ZZ", got["TAIL"]);
+        for (var k = 1; k <= c1; k++) Assert.Equal(("p" + k).TrimEnd(), ((string)got[$"T1({k})"]).TrimEnd());
+        for (var k = 1; k <= c2; k++) Assert.Equal(("q" + k).TrimEnd(), ((string)got[$"T2({k})"]).TrimEnd());
+        Assert.False(got.ContainsKey($"T1({c1 + 1})"));
+        Assert.False(got.ContainsKey($"T2({c2 + 1})"));
+    }
+
+    [Fact]
+    public void DecodeReadsSecondDepFieldAtShiftedOffsetWhenFirstTableIsEmpty()
+    {
+        // C1=0 → T1 contributes nothing, so C2's dep field sits at offset 2, not
+        // at its representative (min-count) offset. Hand-build the bytes (not via
+        // Encode) so this exercises decode's offset-pinning independently.
+        var parsed = CopybookParser.Parse(TwoOdo);
+        // C1=00, C2=05, five 4-byte T2 entries, TAIL "ZZ" — 2+2+20+2 = 26 bytes.
+        var line = "00" + "05" + "aaaabbbbccccddddeeee" + "ZZ" + "\n";
+        Assert.Equal(26, line.TrimEnd('\n').Length);
+
+        var got = Assert.Single(FlatFileCodec.Decode(parsed, line));
+        Assert.Equal(0m, got["C1"]);
+        Assert.Equal(5m, got["C2"]);
+        Assert.Equal("aaaa", got["T2(1)"]);
+        Assert.Equal("eeee", got["T2(5)"]);
+        Assert.Equal("ZZ", got["TAIL"]);
+        Assert.False(got.ContainsKey("T1(1)"));
+    }
+
+    [Fact]
+    public void TwoOdoTablesRoundTripUndelimited()
+    {
+        var parsed = CopybookParser.Parse(TwoOdo);
+        var records = new List<Dictionary<string, object>>
+        {
+            BuildTwoOdoRecord(3, 2),
+            BuildTwoOdoRecord(0, 5),   // first table empty
+            BuildTwoOdoRecord(5, 0),   // second table empty
+            BuildTwoOdoRecord(0, 0),   // both empty
+        };
+
+        var encoded = FlatFileCodec.Encode(parsed, records, CharacterEncoding.Latin1, RecordFormat.FixedLength);
+        Assert.DoesNotContain('\n', encoded);
+
+        var decoded = FlatFileCodec.Decode(parsed, encoded, CharacterEncoding.Latin1, RecordFormat.FixedLength);
+        Assert.Equal(4, decoded.Count);
+        Assert.Equal(new object[] { 3m, 0m, 5m, 0m }, decoded.Select(d => d["C1"]));
+        Assert.Equal(new object[] { 2m, 5m, 0m, 0m }, decoded.Select(d => d["C2"]));
+    }
+
+    [Fact]
+    public void TwoOdoTablesRoundTripUndelimitedEbcdic()
+    {
+        var parsed = CopybookParser.Parse(TwoOdo);
+        var records = new List<Dictionary<string, object>> { BuildTwoOdoRecord(2, 3), BuildTwoOdoRecord(0, 1) };
+
+        var encoded = FlatFileCodec.Encode(parsed, records, CharacterEncoding.Ebcdic037, RecordFormat.FixedLength);
+        var decoded = FlatFileCodec.Decode(parsed, encoded, CharacterEncoding.Ebcdic037, RecordFormat.FixedLength);
+
+        Assert.Equal(2, decoded.Count);
+        Assert.Equal("p1", ((string)decoded[0]["T1(1)"]).TrimEnd());
+        Assert.Equal("q3", ((string)decoded[0]["T2(3)"]).TrimEnd());
+        Assert.Equal(0m, decoded[1]["C1"]);
+        Assert.Equal(1m, decoded[1]["C2"]);
+    }
+
+    [Fact]
+    public void DecodeFailsLoudWhenSecondTableCountOutOfBounds()
+    {
+        // C1=1 (fine), C2=06 (max 5). The failure must name the SECOND table's
+        // bounds, proving each table is validated independently.
+        var parsed = CopybookParser.Parse(TwoOdo);
+        var line = "01" + "ppp" + "06" + string.Concat(Enumerable.Repeat("qqqq", 6)) + "ZZ" + "\n";
+        var ex = Assert.Throws<FormatException>(() => FlatFileCodec.Decode(parsed, line));
+        Assert.Contains("outside the OCCURS bounds", ex.Message);
+        Assert.Contains("C2", ex.Message);
+        Assert.Contains("T2", ex.Message);
+    }
+
+    [Fact]
+    public void EncodeFailsLoudWhenSecondTableCountOutOfBounds()
+    {
+        var parsed = CopybookParser.Parse(TwoOdo);
+        var record = BuildTwoOdoRecord(1, 5);
+        record["C2"] = 6m;                     // claim 6 but bounds are 0 TO 5
+        record["T2(6)"] = "qqqq";
+        var ex = Assert.Throws<FormatException>(() => FlatFileCodec.Encode(parsed, new[] { record }));
+        Assert.Contains("outside the OCCURS bounds", ex.Message);
+        Assert.Contains("C2", ex.Message);
+    }
+
+    [Fact]
+    public void EncodeFailsLoudWhenSecondTableHasEntriesBeyondItsCount()
+    {
+        // C2=2 but a T2(3) is present: encoding at count 2 would silently drop it.
+        var parsed = CopybookParser.Parse(TwoOdo);
+        var record = BuildTwoOdoRecord(1, 2);
+        record["T2(3)"] = "qqqq";
+        var ex = Assert.Throws<FormatException>(() => FlatFileCodec.Encode(parsed, new[] { record }));
+        Assert.Contains("T2(3)", ex.Message);
+    }
+
+    // ---- Three flat ODO tables (recursion of the same resolution) ----
+    //
+    // Length per (C1, C2, C3) is 8 + 2*C1 + 3*C2 + C3 bytes — each combination
+    // below confirmed against GnuCOBOL LENGTH OF the record.
+
+    private const string ThreeOdo = @"
+        01  R3.
+            05  C1 PIC 9(2).
+            05  A  PIC X(2) OCCURS 0 TO 4 DEPENDING ON C1.
+            05  C2 PIC 9(2).
+            05  B  PIC X(3) OCCURS 0 TO 4 DEPENDING ON C2.
+            05  C3 PIC 9(2).
+            05  D  PIC X(1) OCCURS 0 TO 4 DEPENDING ON C3.
+            05  Z  PIC X(2).
+    ";
+
+    [Theory]
+    [InlineData(2, 3, 1, 22)]
+    [InlineData(0, 0, 0, 8)]
+    [InlineData(4, 0, 4, 20)]  // middle table empty, both ends full
+    public void ThreeOdoConcreteLayoutTotalMatchesGnuCobolLength(int c1, int c2, int c3, int total)
+    {
+        var parsed = CopybookParser.Parse(ThreeOdo);
+        Assert.Equal(new[] { "A", "B", "D" }, parsed.Odos.Select(o => o.TableName));
+        var spec = CopybookParser.BuildConcreteLayout(parsed, new[] { c1, c2, c3 });
+        Assert.Equal(total, spec.Sum(f => f.Len));
+    }
+
+    [Theory]
+    [InlineData(2, 3, 1)]
+    [InlineData(0, 0, 0)]
+    [InlineData(4, 0, 4)]
+    public void ThreeOdoTablesRoundTrip(int c1, int c2, int c3)
+    {
+        var parsed = CopybookParser.Parse(ThreeOdo);
+        var r = new Dictionary<string, object>
+        {
+            ["C1"] = (decimal)c1, ["C2"] = (decimal)c2, ["C3"] = (decimal)c3, ["Z"] = "ZZ",
+        };
+        for (var k = 1; k <= c1; k++) r[$"A({k})"] = ("a" + k).PadRight(2).Substring(0, 2);
+        for (var k = 1; k <= c2; k++) r[$"B({k})"] = ("b" + k).PadRight(3);
+        for (var k = 1; k <= c3; k++) r[$"D({k})"] = "d";
+
+        var encoded = FlatFileCodec.Encode(parsed, new[] { r });
+        Assert.Equal(8 + 2 * c1 + 3 * c2 + c3, encoded.TrimEnd('\n').Length);
+
+        var got = Assert.Single(FlatFileCodec.Decode(parsed, encoded));
+        Assert.Equal((decimal)c1, got["C1"]);
+        Assert.Equal((decimal)c2, got["C2"]);
+        Assert.Equal((decimal)c3, got["C3"]);
+        Assert.Equal("ZZ", got["Z"]);
+        for (var k = 1; k <= c2; k++) Assert.Equal(("b" + k).TrimEnd(), ((string)got[$"B({k})"]).TrimEnd());
+        for (var k = 1; k <= c3; k++) Assert.Equal("d", got[$"D({k})"]);
     }
 }
