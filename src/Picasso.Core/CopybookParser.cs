@@ -957,10 +957,16 @@ public static class CopybookParser
             {
                 case "PIC":
                 case "PICTURE":
-                    if (i + 1 >= tokens.Length)
+                    i += 1;
+                    // "PICTURE IS X(9)" / "PIC IS 99" — IS is an optional COBOL noise
+                    // word between the keyword and the picture string; skip it, the
+                    // same way the SIGN clause below tolerates "SIGN IS ...".
+                    if (i < tokens.Length && tokens[i].Equals("IS", StringComparison.OrdinalIgnoreCase))
+                        i += 1;
+                    if (i >= tokens.Length)
                         throw new FormatException($"PIC clause with no picture string: \"{statement}\".");
-                    pictureText = tokens[i + 1];
-                    i += 2;
+                    pictureText = tokens[i];
+                    i += 1;
                     break;
 
                 case "COMP-3":

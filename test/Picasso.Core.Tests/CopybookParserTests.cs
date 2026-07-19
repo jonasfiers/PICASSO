@@ -155,6 +155,20 @@ public class CopybookParserTests
     }
 
     [Fact]
+    public void OptionalIsAfterPicOrPictureIsTolerated()
+    {
+        // "PICTURE IS X(9)" / "PIC IS 99" — IS is an optional COBOL noise word
+        // between the keyword and the picture string; a real compiler accepts it.
+        var parsed = CopybookParser.Parse(
+            "01  R.\n    05  A PICTURE IS X(9).\n    05  B PIC IS 99.\n    05  C PIC X(3).\n");
+        Assert.Equal(new[] { "A", "B", "C" }, parsed.Flat.Select(f => f.Name));
+        Assert.Equal(9, parsed.Flat[0].Len);
+        Assert.Equal(2, parsed.Flat[1].Len);
+        Assert.Equal(3, parsed.Flat[2].Len);
+        Assert.Equal(14, parsed.Root.Len);
+    }
+
+    [Fact]
     public void FreeFormatLineUnderColumn72IsUntouched()
     {
         // A short free-format line never reaches the cols-73 rule.
