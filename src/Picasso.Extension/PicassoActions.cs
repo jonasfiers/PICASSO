@@ -627,7 +627,7 @@ public sealed class PicassoActions
         public int Start { get; set; }
         public int Len { get; set; }
 
-        /// <summary>"Text", "NumericDisplay" or "Comp3".</summary>
+        /// <summary>"Text", "NumericDisplay", "Comp3" or "Binary".</summary>
         public string Type { get; set; } = "";
 
         public int Digits { get; set; }

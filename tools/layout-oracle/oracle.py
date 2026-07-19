@@ -4,15 +4,17 @@ GnuCOBOL differential-offset oracle for PICASSO.
 
 For each copybook in a directory, this compiles it with GnuCOBOL (`cobc`,
 configured for IBM/MVS sizing) and reads the *authoritative* byte length of
-every field via `LENGTH OF`, then diffs those against PICASSO's own computed
-layout. GnuCOBOL is a real COBOL compiler, so its sizing is external ground
+the whole record via `LENGTH OF`, then diffs that against PICASSO's own computed
+record length. GnuCOBOL is a real COBOL compiler, so its sizing is external ground
 truth for PICASSO's offset arithmetic — invaluable before implementing an
-architectural feature (REDEFINES / multiple-01 / OCCURS DEPENDING ON).
+architectural feature (REDEFINES / multiple-01 / OCCURS DEPENDING ON). (PicassoLayout
+also emits a per-field breakdown; the comparison here is on the record total. A
+per-field diff is an unimplemented enhancement — see README's "Extending it".)
 
 Requires: `cobc` (GnuCOBOL 3.x) and the .NET SDK on PATH.
 
 Usage:
-    python3 oracle.py <copybook-dir> [--per-field]
+    python3 oracle.py <copybook-dir>
 
 Known dialect caveat: GnuCOBOL sizes COMP-5 byte-granularly (a 1-2 digit item
 is 1 byte); PICASSO uses IBM COMP-5 sizing (2/4/8, same as COMP-4), which is

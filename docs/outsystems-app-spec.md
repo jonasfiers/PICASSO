@@ -29,7 +29,7 @@ Define these under **Data → Structures**. They mirror the JSON the actions emi
 | `SignLeading` | Boolean |
 | `Comp3` | Boolean |
 
-`Type` is one of `Text`, `NumericDisplay`, `Comp3`.
+`Type` is one of `Text`, `NumericDisplay`, `Comp3`, `Binary`.
 
 **`SignSeparate` and `SignLeading` are load-bearing — do not trim them.** `FlatSpecJson` is an *input* to `DecodeRecords`/`EncodeRecords`, not just something to display. If a round-tripped spec loses those flags, `BALANCE-REC`'s `NET-BALANCE` decodes its trailing `+` as a digit and the call fails. `Comp3` is redundant with `Type = "Comp3"` and exists for convenience.
 

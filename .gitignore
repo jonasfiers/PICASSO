@@ -13,3 +13,6 @@ __pycache__/
 
 # Internal AI-coordination notes — not for the public repo
 /CLAUDE.md
+
+# Claude Code local tooling config — not part of the deliverable
+/.claude/settings.json

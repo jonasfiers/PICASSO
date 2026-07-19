@@ -8,6 +8,7 @@
 - **Unrecognized `COMPUTATIONAL` usage now fails loudly.** A mistyped or unsupported computational usage (`COMPUTATIONAL3` with a dropped hyphen, `COMP-0`, `COMP-7`) used to be silently skipped, leaving the field mis-sized as `DISPLAY`. It is now rejected with a named error. Harmless no-storage clauses (`VALUE`, `JUSTIFIED`, …) are still tolerated.
 - **Alphanumeric column-1–6 sequence labels are stripped** — real fixed-format copybooks put labels like `JL0001` or `RESERV` in the sequence area, not just six digits; these are now recognized and dropped rather than mis-read as a level number.
 - **Off-column `*` comment banners are recognized** — a `*` starting Area A (column 8) with column 7 blank, as several exported copybooks carry, is now treated as a full-line comment instead of gluing onto the first data item.
+- **A storageless item now fails loudly.** A pic-less, childless item (`05 B.` — no `PICTURE`, no width-bearing `USAGE`, no subordinates) used to be dropped silently, sliding every following field forward and under-sizing the record; it is now a named rejection (a real compiler rejects the same input). Level-78 named constants are tolerated and dropped (they carry no storage, like level 88), so a copybook mixing 78 constants with data fields still parses; `PROGRAM-POINTER` joins the rejected pointer family with its own named error.
 
 ### Nested fixed-count `OCCURS` (table of tables)
 
@@ -30,6 +31,20 @@
 - `OCCURS … DEPENDING ON` now accepts a **lower bound of 0** (`OCCURS 0 TO n`, a table that may be empty): a resolved count of 0 makes the table contribute no fields, with everything after it shifting to the table's start.
 - **More than one flat, top-level ODO table per record is now supported**, resolved **left-to-right**. A later table's depending field sits at an offset that itself depends on the *earlier* tables' counts (an earlier count of 0 or n shifts it), so the counts cannot be read all at once: for each table the codec builds the partial concrete layout with the tables resolved so far, reads that table's depending field at its now-pinned offset, validates `m ≤ count ≤ n` (out-of-range fails loudly, per table), and continues — then decodes/encodes against the fully-resolved layout. This is a decode-and-encode capability of the engine's `FlatFileCodec` `ParsedCopybook` overloads; `ParsedCopybook.Odos` lists one `OdoInfo` per table in source order and `BuildConcreteLayout(IReadOnlyList<int> counts)` expands them. Validated against GnuCOBOL (`cobc -x -std=mvs`): the record's `LENGTH OF` matches `BuildConcreteLayout`'s total for two- and three-table records across count combinations, including the count-0-for-an-earlier-table shift, with byte-for-byte round-trips (Latin-1 and EBCDIC, delimited and undelimited).
 - Still rejected, each with its own named error: an ODO table nested inside another `OCCURS`, an `OCCURS` (fixed or ODO) nested inside an ODO table, and a depending field defined after its table or absent. The Integration Studio JSON action surface still rejects any ODO copybook loudly (its flat spec is static).
+
+### Decode coverage (shipped since 1.1.0)
+
+These landed incrementally after 1.1.0 and are grouped here for the next release. Each is documented in the README's "What it does" and validated against GnuCOBOL (`tools/layout-oracle`, `cobc -std=mvs`); several closed a silent-miscompute where the construct used to be skipped and the record mis-sized.
+
+- **`REDEFINES`** (byte overlay) — a redefining item shares its target's bytes; each overlapping field decodes independently. Encode of an overlapping layout is rejected loudly (never last-write-wins). The nameless form (`05 REDEFINES A …`) is handled as a `FILLER` overlay, not laid out as new storage. Supersedes the earlier "REDEFINES still rejected" note in 1.1.0.
+- **`SYNCHRONIZED`/`SYNC` alignment** — a binary `COMP`/`BINARY` item marked SYNC is aligned to its 2/4/8-byte boundary via synthetic slack; no-op on non-binary; SYNC in/around an `OCCURS` is rejected loudly.
+- **Binary `COMP` integers** — `COMP`/`COMP-4`/`COMP-5`/`BINARY` (big-endian, width by digit count the IBM way), with `PACKED-DECIMAL` aliased to COMP-3.
+- **Edited `PIC` pictures** (`Z * . , / B 0 + - $ CR DB`) — measured to their exact display width and surfaced as `Text` (byte passthrough); the numeric value is not re-interpreted.
+- **Overpunched (zoned) signs** — `PIC S9(n)` without `SEPARATE`, trailing or leading, the sign folded into a digit's zone nibble.
+- **Group-level `USAGE` inheritance** — a `USAGE` on a group item applies to subordinate elementary items that state none of their own (nearest-ancestor wins); closed a silent miscompute where a group `COMP-3`/`COMP` was ignored.
+- **Level-88 condition-names** — tolerated and ignored (zero storage).
+- **Multiple `01` records** — supported additively via `CopybookParser.ParseRecords` (each an independent layout); single `Parse` still rejects them.
+- **`OCCURS … DEPENDING ON`** (single flat table) — decode/encode a variable-length record from the depending field's value; nested ODO / OCCURS-in-ODO remain rejected. (Extended above to multiple flat tables per record.)
 
 ## 1.1.0 — fixed-count OCCURS
 

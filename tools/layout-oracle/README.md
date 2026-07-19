@@ -68,6 +68,8 @@ comparable and same-dialect.
 
 ## Extending it
 
-`oracle.py`'s `gnucobol_total` already builds the program with a per-field
-`LENGTH OF` available; add `--per-field` reporting there to pinpoint *which*
-field a delta comes from (that's how the COMP-5 cause above was found).
+The comparison is on the **whole-record** length. `PicassoLayout` already emits a
+per-field breakdown, and the generated program can `DISPLAY LENGTH OF` each field,
+so a `--per-field` mode to pinpoint *which* field a delta comes from is a natural
+addition — not yet implemented. (The COMP-5 cause above was found by inspecting
+those per-field lengths by hand.)

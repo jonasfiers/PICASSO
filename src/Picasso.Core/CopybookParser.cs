@@ -1323,10 +1323,9 @@ public static class CopybookParser
     /// </summary>
     private static FormatException UnsupportedUsage(string usage, string kind, string name, string statement) =>
         new FormatException(
-            $"{usage} ({kind}) usage is not supported: field '{name}' in \"{statement}\". PICASSO models " +
-            "DISPLAY and COMP-3 only; a field with this usage has a different physical width this parser does " +
-            "not compute, and silently skipping the clause would mis-size it. See README's " +
-            "'Not supported (v1)' section.");
+            $"{usage} ({kind}) usage is not supported: field '{name}' in \"{statement}\". A field with this " +
+            "usage has a physical width this parser does not compute, and silently skipping the clause would " +
+            "mis-size it. See the supported USAGE forms and the 'Not supported (v1)' section in the README.");
 
     /// <summary>
     /// Pushes a group's USAGE down onto the subordinate elementary items that
