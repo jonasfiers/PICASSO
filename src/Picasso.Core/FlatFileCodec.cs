@@ -143,6 +143,10 @@ public static class FlatFileCodec
             }
 
             var spec = CopybookParser.BuildConcreteLayout(parsed, counts);
+            // An ODO record can also carry a REDEFINES overlay; encoding overlapping
+            // bytes is ambiguous (last write silently wins), so refuse it here just
+            // as the fixed-layout encode path does — never emit a corrupted record.
+            RejectOverlappingLayout(spec);
             lines.Add(EncodeRecordFields(spec, record, encoding));
         }
 
@@ -159,7 +163,9 @@ public static class FlatFileCodec
             var counts = ResolveCounts(parsed, line, offset: 0, encoding);
 
             var spec = CopybookParser.BuildConcreteLayout(parsed, counts);
-            var expected = spec.Sum(f => f.Len);
+            // Overlap-aware (max Start+Len), not Sum of lengths: a REDEFINES overlay
+            // shares bytes, so Sum would double-count it and reject the valid record.
+            var expected = RecordLength(spec);
             if (line.Length != expected)
                 throw new FormatException(
                     $"Variable-length record with {DescribeCounts(parsed, counts)} is {line.Length} bytes, " +
@@ -185,7 +191,9 @@ public static class FlatFileCodec
             var counts = ResolveCounts(parsed, text, pos, encoding);
 
             var spec = CopybookParser.BuildConcreteLayout(parsed, counts);
-            var recordLen = spec.Sum(f => f.Len);
+            // Overlap-aware (max Start+Len), not Sum of lengths — see the delimited
+            // path above; a REDEFINES overlay must not be double-counted here either.
+            var recordLen = RecordLength(spec);
             if (pos + recordLen > text.Length)
                 throw new FormatException(
                     $"Undelimited record at offset {pos} with {DescribeCounts(parsed, counts)} needs " +

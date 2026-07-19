@@ -26,6 +26,52 @@ public class OdoTests
             05  TAIL PIC X(2).
     ";
 
+    // REDEFINES overlay in a record that also has an ODO tail — the classic
+    // mainframe shape (a raw key redefined as numeric, then a variable table).
+    // The parser lays KEY-NUM over KEY-RAW (both @0), so the record is overlap-
+    // aware: 4 (shared) + 1 (CNT) + 2*count (T). The codec must measure it the
+    // same overlap-aware way, and must refuse to ENCODE the ambiguous overlay.
+    private const string RedefinesOdo = @"
+        01  R.
+            05  KEY-RAW PIC X(4).
+            05  KEY-NUM REDEFINES KEY-RAW PIC 9(4).
+            05  CNT     PIC 9.
+            05  T OCCURS 0 TO 3 DEPENDING ON CNT.
+                10  V PIC X(2).
+    ";
+
+    [Fact]
+    public void RedefinesInsideOdoRecordDecodesAtOverlaidLength()
+    {
+        // A genuine 9-byte record (CNT=2): "1234" + "2" + "xx" + "yy". Both overlay
+        // readings come from bytes 0-3; the record is 9 bytes, not 13 (the Sum of
+        // all field lengths, which double-counts the overlap). Must NOT be rejected.
+        var parsed = CopybookParser.Parse(RedefinesOdo);
+        var decoded = FlatFileCodec.Decode(parsed, "12342xxyy");
+        var rec = Assert.Single(decoded);
+        Assert.Equal("1234", rec["KEY-RAW"]);
+        Assert.Equal(1234m, rec["KEY-NUM"]);
+        Assert.Equal(2m, rec["CNT"]);
+        Assert.Equal("xx", rec["T(1)-V"]);
+        Assert.Equal("yy", rec["T(2)-V"]);
+    }
+
+    [Fact]
+    public void RedefinesInsideOdoRecordEncodeRejectedAsOverlapping()
+    {
+        // Encoding an overlapping layout is ambiguous (which of KEY-RAW / KEY-NUM
+        // owns bytes 0-3?), so it must fail loud — exactly as the non-ODO REDEFINES
+        // encode path does — never silently write both readings (a 13-byte record).
+        var parsed = CopybookParser.Parse(RedefinesOdo);
+        var record = new Dictionary<string, object>
+        {
+            ["KEY-RAW"] = "1234", ["KEY-NUM"] = 1234m, ["CNT"] = 2m,
+            ["T(1)-V"] = "xx", ["T(2)-V"] = "yy",
+        };
+        var ex = Assert.Throws<FormatException>(() => FlatFileCodec.Encode(parsed, new[] { record }));
+        Assert.Contains("overlap", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
     // ---- Recognition + representative layout ----
 
     [Fact]
