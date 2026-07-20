@@ -6,7 +6,7 @@ A COBOL copybook parser in C#/.NET. Point it at a `.cpy` file and it derives the
 
 It's built to become an **OutSystems Integration Studio Extension**, but this repo isn't that extension — it's the portable core the extension is built *from*: the parsing/decoding engine (`Picasso.Core`) and the Integration Studio action classes that wrap it (`Picasso.Extension`), as a built, tested pair of DLLs. Assembling those into the extension itself is a manual step in Integration Studio — a Windows-only GUI tool — documented under [Using it from OutSystems](#using-it-from-outsystems), not automated here.
 
-*The .NET implementation was written by Claude (Anthropic), directed and verified throughout by [Jonas Fiers](https://github.com/jonasfiers) — see [Contributions](#contributions).*
+*Built by [Jonas Fiers](https://github.com/jonasfiers) with Claude (Anthropic) as an implementation collaborator — under Jonas's specification and verification throughout. See [Contributions](#contributions).*
 
 **Layouts are cross-checked against GnuCOBOL — a real COBOL compiler — and round-tripped through a genuine 1990s mainframe file whose expected values were published by an independent tool.** See [How it's validated](#how-its-validated).
 
@@ -160,12 +160,7 @@ The last two take/return OutSystems `Binary Data` rather than `Text` — for a c
 
 Every string in the codec is one byte per char (Latin-1), not UTF-8. COMP-3 packs two digits into a byte and the resulting bytes are frequently not valid UTF-8 — read one of these files as UTF-8 and the packed fields are silently destroyed. Callers must read and write with Latin-1.
 
-## Contributions
-
-- **Requirements, direction, and verification** — [Jonas Fiers](https://github.com/jonasfiers). The scope decisions (what's in v1, what's explicitly deferred), the choice to validate against a real mainframe copybook rather than stopping at synthetic test data, and reviewing each change against that real data are his.
-- **Implementation** — written by Claude (Anthropic), under that direction throughout, across two machines: a laptop for the initial engine and parser, a homelab devbox for the rest.
-
-The full [commit history](https://github.com/jonasfiers/PICASSO/commits/main) is public — commits are authored by Jonas, with Claude credited in the `Co-Authored-By` trailer — and this section states the split plainly rather than leaving it to be inferred from commit metadata.
+Built by [Jonas Fiers](https://github.com/jonasfiers): the scope decisions (what's in v1, what's explicitly deferred), the validation strategy (verifying against a real mainframe copybook and the GnuCOBOL compiler rather than stopping at synthetic test data), and the review of each change against that real data. Claude (Anthropic) implemented the C# under that specification and verification. Commits are authored by Jonas, with Claude credited in the `Co-Authored-By` trailer.
 
 ## License
 
